@@ -18,6 +18,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
@@ -344,6 +345,53 @@ fun StatusTrackerDashboard(
 
                 Spacer(modifier = Modifier.height(12.dp))
 
+                // Priority Stats Bar
+                val pendingHigh = todoList.count { it.priority == "High" && !it.completed }
+                val pendingMed = todoList.count { it.priority == "Medium" && !it.completed }
+                val pendingLow = todoList.count { it.priority == "Low" && !it.completed }
+                Row(
+                    modifier = Modifier.fillMaxWidth().padding(bottom = 10.dp),
+                    horizontalArrangement = Arrangement.spacedBy(8.dp),
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Text(
+                        text = "ROADMAP METRICS:",
+                        color = CyberTextMuted,
+                        fontSize = 9.sp,
+                        fontWeight = FontWeight.Bold,
+                        letterSpacing = 0.5.sp
+                    )
+                    Row(
+                        horizontalArrangement = Arrangement.spacedBy(4.dp),
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Box(
+                            modifier = Modifier
+                                .background(CyberOrange.copy(alpha = 0.2f), RoundedCornerShape(4.dp))
+                                .border(androidx.compose.foundation.BorderStroke(1.dp, CyberOrange.copy(alpha = 0.4f)), RoundedCornerShape(4.dp))
+                                .padding(horizontal = 6.dp, vertical = 2.dp)
+                        ) {
+                            Text(text = "HIGH: $pendingHigh", color = CyberOrange, fontSize = 8.sp, fontWeight = FontWeight.Bold)
+                        }
+                        Box(
+                            modifier = Modifier
+                                .background(CyberCyan.copy(alpha = 0.2f), RoundedCornerShape(4.dp))
+                                .border(androidx.compose.foundation.BorderStroke(1.dp, CyberCyan.copy(alpha = 0.4f)), RoundedCornerShape(4.dp))
+                                .padding(horizontal = 6.dp, vertical = 2.dp)
+                        ) {
+                            Text(text = "MEDIUM: $pendingMed", color = CyberCyan, fontSize = 8.sp, fontWeight = FontWeight.Bold)
+                        }
+                        Box(
+                            modifier = Modifier
+                                .background(CyberTextMuted.copy(alpha = 0.2f), RoundedCornerShape(4.dp))
+                                .border(androidx.compose.foundation.BorderStroke(1.dp, CyberTextMuted.copy(alpha = 0.4f)), RoundedCornerShape(4.dp))
+                                .padding(horizontal = 6.dp, vertical = 2.dp)
+                        ) {
+                            Text(text = "LOW: $pendingLow", color = CyberTextMuted, fontSize = 8.sp, fontWeight = FontWeight.Bold)
+                        }
+                    }
+                }
+
                 // Search Box
                 OutlinedTextField(
                     value = searchQuery,
@@ -539,6 +587,234 @@ fun StatusTrackerDashboard(
                                             modifier = Modifier.size(14.dp)
                                         )
                                     }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
+        // Section: Gemini Integrity Verifier & On-Device Co-Processor (Zero Token-Munching Rider Protection)
+        val isGeminiEnabled by viewModel.isGeminiEnabled.collectAsState()
+        val isNanoEnabled by viewModel.isNanoEnabled.collectAsState()
+        val geminiAuditResult by viewModel.geminiAuditResult.collectAsState()
+        val isGeminiLoading by viewModel.isGeminiLoading.collectAsState()
+
+        var sampleAuditText by remember { mutableStateOf(
+            "CONVERSATION CHUNK #012 [07-05-2026 18:32:00] (Offset 2048KB)\n" +
+            "USER: How do we prevent token-munching in offline parsing pipelines?\n" +
+            "GROK: Implement zero-copy local stream processing where cloud AI is never a structural dependency, but only an optional verification layer toggled per session.\n" +
+            "CONVERSATION CHUNK #013 [07-05-2026 18:32:45] (Offset 2112KB)\n" +
+            "USER: Excellent, and how does the sliding overlapping buffer ensure no data is lost?\n" +
+            "GROK: By overlapping blocks with a 4% margin, any sentence or block cut off in chunk N is fully present in chunk N+1, preventing clipping during extraction."
+        ) }
+
+        Card(
+            modifier = Modifier.fillMaxWidth(),
+            colors = CardDefaults.cardColors(containerColor = CyberSurface),
+            border = androidx.compose.foundation.BorderStroke(1.dp, CyberBorder)
+        ) {
+            Column(modifier = Modifier.padding(16.dp)) {
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Icon(
+                        imageVector = Icons.Default.Psychology,
+                        contentDescription = null,
+                        tint = CyberCyan,
+                        modifier = Modifier.size(20.dp)
+                    )
+                    Spacer(modifier = Modifier.width(8.dp))
+                    Text(
+                        text = "GEMINI INTEGRITY VERIFIER",
+                        color = CyberText,
+                        fontSize = 13.sp,
+                        fontWeight = FontWeight.Bold
+                    )
+                    Spacer(modifier = Modifier.width(6.dp))
+                    Box(
+                        modifier = Modifier
+                            .background(CyberCyan.copy(alpha = 0.15f), RoundedCornerShape(4.dp))
+                            .border(androidx.compose.foundation.BorderStroke(1.dp, CyberCyan.copy(alpha = 0.5f)), RoundedCornerShape(4.dp))
+                            .padding(horizontal = 6.dp, vertical = 2.dp)
+                    ) {
+                        Text(
+                            text = "OFFLINE-SAFE",
+                            color = CyberCyan,
+                            fontSize = 8.sp,
+                            fontWeight = FontWeight.Bold,
+                            fontFamily = FontFamily.Monospace
+                        )
+                    }
+                }
+
+                Spacer(modifier = Modifier.height(10.dp))
+
+                Text(
+                    text = "Architectural Protocol Info:",
+                    color = CyberText,
+                    fontSize = 11.sp,
+                    fontWeight = FontWeight.Bold
+                )
+                Spacer(modifier = Modifier.height(4.dp))
+                Text(
+                    text = "• Account Bound vs. Developer Key: By default, the extractor utilizes a 'blank' developer-provided sandbox key configured in AI Studio Secrets. It operates without requiring individual user accounts or logins.\n" +
+                           "• On-Device Gemini Nano (Pixel 9a Beta): For Android 15/16/17 Beta users, Gemini Nano runs 100% locally via the Google AI Edge SDK. Calculations run on your device's Tensor G4 NPU, costing zero cloud tokens and requiring no internet.\n" +
+                           "• Zero Token-Munching Rider Guarantee: Cloud Gemini is NEVER placed as a background rider on your core processing streams. Offline-first local decoders handle parsing, ensuring complete privacy unless specifically opted-in per audit below.",
+                    color = CyberTextMuted,
+                    fontSize = 10.sp,
+                    lineHeight = 14.sp
+                )
+
+                Spacer(modifier = Modifier.height(14.dp))
+                Divider(color = CyberBorder)
+                Spacer(modifier = Modifier.height(12.dp))
+
+                // Toggle 1: Gemini Cloud Verification Mode
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.SpaceBetween,
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Column(modifier = Modifier.weight(1f)) {
+                        Text("Cloud Verification Engine", color = CyberText, fontSize = 11.sp, fontWeight = FontWeight.Bold)
+                        Text("Uses developer API key (Gemini 3.5 Flash)", color = CyberTextMuted, fontSize = 9.sp)
+                    }
+                    Switch(
+                        checked = isGeminiEnabled,
+                        onCheckedChange = { 
+                            viewModel.setGeminiEnabled(it)
+                            if (it) viewModel.setNanoEnabled(false) // Mutually exclusive
+                        },
+                        colors = SwitchDefaults.colors(
+                            checkedThumbColor = CyberBg,
+                            checkedTrackColor = CyberCyan,
+                            uncheckedThumbColor = CyberTextMuted,
+                            uncheckedTrackColor = CyberBg
+                        )
+                    )
+                }
+
+                Spacer(modifier = Modifier.height(8.dp))
+
+                // Toggle 2: Local On-Device Gemini Nano Engine (Pixel 9a Pilot)
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.SpaceBetween,
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Column(modifier = Modifier.weight(1f)) {
+                        Row(verticalAlignment = Alignment.CenterVertically) {
+                            Text("Gemini Nano On-Device Pilot", color = CyberText, fontSize = 11.sp, fontWeight = FontWeight.Bold)
+                            Spacer(modifier = Modifier.width(6.dp))
+                            Box(
+                                modifier = Modifier
+                                    .background(CyberOrange.copy(alpha = 0.15f), RoundedCornerShape(4.dp))
+                                    .padding(horizontal = 4.dp, vertical = 1.dp)
+                            ) {
+                                Text("BETA", color = CyberOrange, fontSize = 7.sp, fontWeight = FontWeight.Bold)
+                            }
+                        }
+                        Text("Hardware-accelerated G4 NPU co-processing (Offline)", color = CyberTextMuted, fontSize = 9.sp)
+                    }
+                    Switch(
+                        checked = isNanoEnabled,
+                        onCheckedChange = { 
+                            viewModel.setNanoEnabled(it)
+                            if (it) viewModel.setGeminiEnabled(false) // Mutually exclusive
+                        },
+                        colors = SwitchDefaults.colors(
+                            checkedThumbColor = CyberBg,
+                            checkedTrackColor = CyberOrange,
+                            uncheckedThumbColor = CyberTextMuted,
+                            uncheckedTrackColor = CyberBg
+                        )
+                    )
+                }
+
+                Spacer(modifier = Modifier.height(14.dp))
+                Text("Test Extraction Slicing & Recombination Buffer:", color = CyberText, fontSize = 11.sp, fontWeight = FontWeight.Bold)
+                Spacer(modifier = Modifier.height(6.dp))
+
+                OutlinedTextField(
+                    value = sampleAuditText,
+                    onValueChange = { sampleAuditText = it },
+                    placeholder = { Text("Input extracted slices content to verify...", color = CyberTextMuted, fontSize = 11.sp) },
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .height(100.dp),
+                    shape = RoundedCornerShape(8.dp),
+                    textStyle = TextStyle(fontFamily = FontFamily.Monospace, fontSize = 10.sp, color = CyberText),
+                    colors = OutlinedTextFieldDefaults.colors(
+                        focusedBorderColor = CyberCyan,
+                        unfocusedBorderColor = CyberBorder,
+                        focusedContainerColor = CyberBg,
+                        unfocusedContainerColor = CyberBg
+                    )
+                )
+
+                Spacer(modifier = Modifier.height(12.dp))
+
+                Button(
+                    onClick = { viewModel.runGeminiSlicingAudit(context, sampleAuditText) },
+                    enabled = !isGeminiLoading && (isGeminiEnabled || isNanoEnabled),
+                    colors = ButtonDefaults.buttonColors(
+                        containerColor = if (isNanoEnabled) CyberOrange else CyberCyan,
+                        contentColor = CyberBg,
+                        disabledContainerColor = CyberSurface,
+                        disabledContentColor = CyberTextMuted
+                    ),
+                    shape = RoundedCornerShape(8.dp),
+                    modifier = Modifier.fillMaxWidth()
+                ) {
+                    if (isGeminiLoading) {
+                        CircularProgressIndicator(modifier = Modifier.size(16.dp), color = CyberBg, strokeWidth = 2.dp)
+                        Spacer(modifier = Modifier.width(8.dp))
+                        Text("Analyzing Slicing Boundaries...", fontSize = 11.sp, fontWeight = FontWeight.Bold)
+                    } else {
+                        val label = when {
+                            isNanoEnabled -> "RUN LOCAL GEMINI NANO AUDIT"
+                            isGeminiEnabled -> "RUN CLOUD VERIFIER RECONSTRUCTION CHECK"
+                            else -> "ENABLE AUDITOR MODE TO INITIATE"
+                        }
+                        Text(label, fontSize = 11.sp, fontWeight = FontWeight.Bold)
+                    }
+                }
+
+                if (geminiAuditResult != null) {
+                    Spacer(modifier = Modifier.height(14.dp))
+                    Text("Verification Report Results:", color = CyberText, fontSize = 11.sp, fontWeight = FontWeight.Bold)
+                    Spacer(modifier = Modifier.height(6.dp))
+
+                    Box(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .background(CyberBg, RoundedCornerShape(8.dp))
+                            .border(androidx.compose.foundation.BorderStroke(1.dp, CyberBorder), RoundedCornerShape(8.dp))
+                            .padding(10.dp)
+                    ) {
+                        Column {
+                            Text(
+                                text = geminiAuditResult ?: "",
+                                color = if (isNanoEnabled) CyberOrange else CyberText,
+                                fontSize = 10.sp,
+                                lineHeight = 14.sp,
+                                fontFamily = FontFamily.Monospace
+                            )
+                            Spacer(modifier = Modifier.height(8.dp))
+                            Row(
+                                modifier = Modifier.fillMaxWidth(),
+                                horizontalArrangement = Arrangement.End
+                            ) {
+                                TextButton(
+                                    onClick = {
+                                        val clipboard = context.getSystemService(Context.CLIPBOARD_SERVICE) as android.content.ClipboardManager
+                                        val clip = android.content.ClipData.newPlainText("Gemini Audit", geminiAuditResult)
+                                        clipboard.setPrimaryClip(clip)
+                                    },
+                                    contentPadding = PaddingValues(horizontal = 8.dp, vertical = 2.dp),
+                                    modifier = Modifier.height(24.dp)
+                                ) {
+                                    Text("COPY REPORT", color = CyberCyan, fontSize = 9.sp, fontWeight = FontWeight.Bold)
                                 }
                             }
                         }

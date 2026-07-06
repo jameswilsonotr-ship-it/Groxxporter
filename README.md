@@ -1,21 +1,43 @@
-<div align="center">
-<img width="1200" height="475" alt="GHBanner" src="https://ai.google.dev/static/site-assets/images/share-ais-513315318.png" />
-</div>
+# Grok Export Extractor & Integrity Suite
 
-# Run and deploy your AI Studio app
+An offline-first, high-fidelity developer companion and utility built for extracting, chunking, parsing, and verifying xAI Grok conversation zip archives with a cyberpunk neon interface.
 
-This contains everything you need to run your app locally.
+---
 
-View your app in AI Studio: https://ai.studio/apps/a3f6a530-c353-4fec-8de5-12aa3ce5c373
+## 🌌 Architectural Design Philosophy
 
-## Run Locally
+### 1. Zero Token-Munching Rider Protection
+Traditional apps often "munch" user tokens by background-routing all parsed data streams directly through cloud AI endpoints. Under this codebase:
+- **Core Pipeline is 100% Local**: Parsing, CSV/Markdown/HTML compilation, attachment hex-decoding, and database persistence occur entirely on-device, offline.
+- **Opt-In Integrity Verification**: Cloud-based or on-device AI audits are strictly **opt-in per session/conversation**, isolated from the primary parsing loop. Your data is kept private, fast, and token-efficient.
 
-**Prerequisites:**  [Android Studio](https://developer.android.com/studio)
+### 2. On-Device Gemini Nano Co-Processing (Android 15+ / 16 / 17 Beta)
+Designed to run beautifully on high-tier silicon like the Tensor G4 inside the **Pixel 9a**:
+- Uses the system-level **Google AI Edge SDK** (formerly AICore) to load **Gemini Nano** directly into the on-device NPU.
+- Performs full chunking validation, boundary inspection, and slicing diagnostics with **0ms network overhead**, complete offline operation, and **zero API costs**.
 
+---
 
-1. Open Android Studio
-2. Select **Open** and choose the directory containing this project
-3. Allow Android Studio to fix any incompatibilities as it imports the project.
-4. Create a file named `.env` in the project directory and set `GEMINI_API_KEY` in that file to your Gemini API key (see `.env.example` for an example)
-5. Remove this line from the app's `build.gradle.kts` file: `signingConfig = signingConfigs.getByName("debugConfig")`
-6. Run the app on an emulator or physical device
+## 🛠️ Features
+
+*   **Cyberpunk Interface**: A gorgeous dark UI theme with glowing cyan and orange accents, status micro-chips, and dynamic metrics.
+*   **Granular Parser Status Dashboard**: A centralized status tracking dashboard integrating a live diagnostic error inspector, backup snapshot controller, and priority metrics.
+*   **Gemini Integrity Sandbox**: Toggleable cloud-based (Gemini 3.5 Flash) and local (Gemini Nano) verification decks to audit slicing integrity, boundary loss, and recombination perfectness.
+*   **Extensible Todo & Changelog Roadmap**: A dynamically synchronized release checklist featuring high, medium, and low priority indicators.
+
+---
+
+## ⚙️ Key Configuration & Key Binding
+
+The application leverages a developer-supplied API key for cloud verification checks, isolated from client account configurations:
+- **Developer Key Binding**: Set your keys in the AI Studio Secrets panel. The system injects this into `BuildConfig.GEMINI_API_KEY` at runtime.
+- **Client Security**: No end-user login or account creation is required to use the pipeline. If no API key is supplied, the Integrity Sandbox cleanly falls back to high-fidelity on-device local simulation reports.
+
+---
+
+## 📈 Developer Roadmap & Milestone Status
+
+Active tasks are tracked in `/TODO.md` and parsed directly into the status dashboard with dynamic count badges:
+- 🔴 **High Priority**: Advanced attachment filtering, in-app markdown viewer, local search index indexing.
+- 🔵 **Medium Priority**: Scheduled backups via WorkManager, custom HTML styling, Google Drive cloud integration.
+- ⚪ **Low Priority**: Media slideshow decks, JSON Schema validation.

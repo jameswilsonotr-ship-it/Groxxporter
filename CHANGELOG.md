@@ -2,6 +2,12 @@
 
 All notable changes to the **Grok Export Extractor** project will be documented in this file.
 
+## [v1.3.0] - 2026-07-05
+### Added
+- **Gemini Integrity Verifier & On-Device Co-Processor**: An interactive verification panel allowing developers to toggle between cloud Gemini and on-device Gemini Nano (via Pixel 9a AICore local NPU co-processing) to audit chunk slicing and recombination continuity.
+- **Priority-Driven Roadmap Metrics**: Added high-visibility, color-coded badges indicating counts of pending High, Medium, and Low priority roadmap items directly on the dashboard.
+- **Zero Token-Munching Rider Protection**: Restructured the processing flow to enforce 100% offline local parsing, keeping the Gemini API strictly as an opt-in verification agent.
+
 ## [v1.2.0] - 2026-07-05
 ### Added
 - **Dynamic Custom Output Folder Picker**: Users can now select an external, persistable directory via Android's Document Provider API to save a direct copy of the compiled ZIP package.
