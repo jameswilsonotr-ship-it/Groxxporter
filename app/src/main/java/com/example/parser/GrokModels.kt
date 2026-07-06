@@ -25,3 +25,14 @@ data class ExtractionStats(
     var binaryFilesProcessed: Int = 0,
     var hexFilesDecoded: Int = 0
 )
+
+data class MinedBinary(
+    val name: String,
+    val size: Long,
+    val mimeType: String,
+    val sha256: String,
+    val details: String, // e.g. "PNG Image 800x600" or "PDF Document"
+    val conversationId: String? = null,
+    val path: String = ""
+)
+

@@ -31,6 +31,11 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.example.parser.Conversation
 import com.example.parser.ExtractionStats
+import com.example.parser.GrokJob
+import com.example.parser.GrokJobManager
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.withContext
+import java.io.File
 import java.text.SimpleDateFormat
 import java.util.*
 
@@ -61,6 +66,21 @@ fun DashboardScreen(viewModel: GrokViewModel) {
     val optCsv by viewModel.optCsv.collectAsState()
     val optBinaries by viewModel.optBinaries.collectAsState()
 
+    // Integrity report states
+    val validationMatched by viewModel.validationMatched.collectAsState()
+    val sha256Checksum by viewModel.sha256Checksum.collectAsState()
+    val logs by com.example.parser.GrokLogger.logs.collectAsState()
+
+    // Jobs states
+    val jobs by viewModel.jobs.collectAsState()
+    val currentJob by viewModel.currentJob.collectAsState()
+    val jobLabelInput by viewModel.jobLabelInput.collectAsState()
+    val enableBatchMode by viewModel.enableBatchMode.collectAsState()
+
+    var showHelpDialog by remember { mutableStateOf(false) }
+    var viewingJobLogs by remember { mutableStateOf<GrokJob?>(null) }
+    var viewingJobReports by remember { mutableStateOf<GrokJob?>(null) }
+
     // Filtered view search query
     var searchQuery by remember { mutableStateOf("") }
     var selectedPreviewChat by remember { mutableStateOf<Conversation?>(null) }
@@ -70,6 +90,148 @@ fun DashboardScreen(viewModel: GrokViewModel) {
         contract = ActivityResultContracts.GetContent()
     ) { uri: Uri? ->
         uri?.let { viewModel.startImport(context, it) }
+    }
+
+    // Load archived jobs on startup
+    LaunchedEffect(Unit) {
+        viewModel.loadAllJobs(context)
+    }
+
+    if (showHelpDialog) {
+        HelpGuideDialog(onDismiss = { showHelpDialog = false })
+    }
+
+    // Dialog showing archived job logs
+    if (viewingJobLogs != null) {
+        val job = viewingJobLogs!!
+        var logText by remember(job) { mutableStateOf("Loading logs...") }
+        LaunchedEffect(job) {
+            withContext(Dispatchers.IO) {
+                try {
+                    val logFile = File(job.folderPath, "grok_extraction_log.txt")
+                    logText = if (logFile.exists()) logFile.readText() else "Log file not found."
+                } catch (e: Exception) {
+                    logText = "Error reading logs: ${e.localizedMessage}"
+                }
+            }
+        }
+
+        AlertDialog(
+            onDismissRequest = { viewingJobLogs = null },
+            confirmButton = {
+                TextButton(onClick = { viewingJobLogs = null }) {
+                    Text("Close", color = CyberCyan)
+                }
+                TextButton(onClick = {
+                    val logFile = File(job.folderPath, "grok_extraction_log.txt")
+                    if (logFile.exists()) {
+                        val authority = "${context.packageName}.fileprovider"
+                        val logUri = androidx.core.content.FileProvider.getUriForFile(context, authority, logFile)
+                        val intent = Intent(Intent.ACTION_SEND).apply {
+                            type = "text/plain"
+                            putExtra(Intent.EXTRA_STREAM, logUri)
+                            addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
+                        }
+                        context.startActivity(Intent.createChooser(intent, "Share Job Logs"))
+                    }
+                }) {
+                    Text("Share Logs", color = CyberCyan)
+                }
+            },
+            title = { Text("Logs for Job #${job.number}: ${job.label}", color = CyberText, fontSize = 16.sp) },
+            text = {
+                Box(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .height(300.dp)
+                        .background(CyberBg, RoundedCornerShape(8.dp))
+                        .border(1.dp, CyberBorder, RoundedCornerShape(8.dp))
+                        .padding(8.dp)
+                ) {
+                    LazyColumn(modifier = Modifier.fillMaxSize()) {
+                        item {
+                            Text(
+                                text = logText,
+                                fontFamily = FontFamily.Monospace,
+                                fontSize = 10.sp,
+                                color = CyberTextMuted
+                            )
+                        }
+                    }
+                }
+            },
+            containerColor = CyberSurface,
+            shape = RoundedCornerShape(16.dp)
+        )
+    }
+
+    // Dialog showing archived job reports
+    if (viewingJobReports != null) {
+        val job = viewingJobReports!!
+        var reportText by remember(job) { mutableStateOf("Loading report...") }
+        var skeletalText by remember(job) { mutableStateOf("Loading skeletal structure...") }
+        LaunchedEffect(job) {
+            withContext(Dispatchers.IO) {
+                try {
+                    val reportFile = File(job.folderPath, "sha256_verification.txt")
+                    reportText = if (reportFile.exists()) reportFile.readText() else "Report not found."
+
+                    val skeletalFile = File(job.folderPath, "skeletal_structure.json")
+                    skeletalText = if (skeletalFile.exists()) skeletalFile.readText() else "Skeletal structure not found."
+                } catch (e: Exception) {
+                    reportText = "Error: ${e.localizedMessage}"
+                }
+            }
+        }
+
+        AlertDialog(
+            onDismissRequest = { viewingJobReports = null },
+            confirmButton = {
+                TextButton(onClick = { viewingJobReports = null }) {
+                    Text("Close", color = CyberCyan)
+                }
+            },
+            title = { Text("Integrity Report for Job #${job.number}", color = CyberText, fontSize = 16.sp) },
+            text = {
+                LazyColumn(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .height(350.dp),
+                    verticalArrangement = Arrangement.spacedBy(16.dp)
+                ) {
+                    item {
+                        Text("SHA-256 Validation Report", fontWeight = FontWeight.Bold, color = CyberCyan, fontSize = 13.sp)
+                        Spacer(modifier = Modifier.height(4.dp))
+                        Text(
+                            text = reportText,
+                            fontFamily = FontFamily.Monospace,
+                            fontSize = 10.sp,
+                            color = CyberTextMuted,
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .background(CyberBg, RoundedCornerShape(8.dp))
+                                .padding(8.dp)
+                        )
+                    }
+                    item {
+                        Text("Skeletal Remains (JSON Structure)", fontWeight = FontWeight.Bold, color = CyberCyan, fontSize = 13.sp)
+                        Spacer(modifier = Modifier.height(4.dp))
+                        Text(
+                            text = skeletalText,
+                            fontFamily = FontFamily.Monospace,
+                            fontSize = 10.sp,
+                            color = CyberTextMuted,
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .background(CyberBg, RoundedCornerShape(8.dp))
+                                .padding(8.dp)
+                        )
+                    }
+                }
+            },
+            containerColor = CyberSurface,
+            shape = RoundedCornerShape(16.dp)
+        )
     }
 
     Scaffold(
@@ -98,6 +260,9 @@ fun DashboardScreen(viewModel: GrokViewModel) {
                     titleContentColor = CyberText
                 ),
                 actions = {
+                    IconButton(onClick = { showHelpDialog = true }) {
+                        Icon(Icons.Default.Help, contentDescription = "Help Guide", tint = CyberCyan)
+                    }
                     if (importState is ImportState.Success) {
                         IconButton(onClick = { viewModel.resetState() }) {
                             Icon(Icons.Default.Refresh, contentDescription = "Reset", tint = CyberCyan)
@@ -131,8 +296,13 @@ fun DashboardScreen(viewModel: GrokViewModel) {
                     is ImportState.Idle -> {
                         item {
                             ImportLauncherCard(
+                                jobLabelInput = jobLabelInput,
+                                onJobLabelChange = { viewModel.jobLabelInput.value = it },
                                 onLaunchPicker = {
                                     pickArchiveLauncher.launch("*/*")
+                                },
+                                onLoadDemo = {
+                                    viewModel.loadSampleArchive(context)
                                 }
                             )
                         }
@@ -155,6 +325,36 @@ fun DashboardScreen(viewModel: GrokViewModel) {
                                 onOptBinariesChange = { viewModel.optBinaries.value = it }
                             )
                         }
+
+                        item {
+                            AdvancedDashboardTogglesCard(viewModel = viewModel)
+                        }
+
+                        item {
+                            ProcessingJobsHistoryCard(
+                                jobs = jobs,
+                                onViewLogs = { viewingJobLogs = it },
+                                onViewReports = { viewingJobReports = it },
+                                onShareZip = { job ->
+                                    val zipFile = File(job.folderPath, "grok_processed_export.zip")
+                                    if (zipFile.exists()) {
+                                        val authority = "${context.packageName}.fileprovider"
+                                        val fileUri = androidx.core.content.FileProvider.getUriForFile(context, authority, zipFile)
+                                        shareExportedFile(context, fileUri)
+                                    }
+                                },
+                                onDeleteJob = { viewModel.deleteJob(context, it) },
+                                onClearAll = { viewModel.clearAllJobs(context) }
+                            )
+                        }
+
+                        item {
+                            AutoBackupHistoryCard(viewModel = viewModel)
+                        }
+
+                        item {
+                            GrokLoggerPanel(logs = logs)
+                        }
                     }
 
                     is ImportState.Loading -> {
@@ -165,11 +365,39 @@ fun DashboardScreen(viewModel: GrokViewModel) {
                                 stats = stats
                             )
                         }
+
+                        item {
+                            GrokLoggerPanel(logs = logs)
+                        }
                     }
 
                     is ImportState.Success -> {
                         item {
                             MetricsSummaryCard(stats = state.stats)
+                        }
+
+                        item {
+                            VisualizationsDashboardCard(conversations = state.conversations)
+                        }
+
+                        if (enableBatchMode) {
+                            item {
+                                BatchConsoleCard(viewModel = viewModel)
+                            }
+                        }
+
+                        item {
+                            RecursiveBinarySearchCard(viewModel = viewModel)
+                        }
+
+                        // Cryptographic verification details if available
+                        validationMatched?.let { matched ->
+                            item {
+                                IntegrityVerificationCard(
+                                    validationMatched = matched,
+                                    sha256Checksum = sha256Checksum
+                                )
+                            }
                         }
 
                         // Export Actions Card
@@ -184,6 +412,10 @@ fun DashboardScreen(viewModel: GrokViewModel) {
                                     }
                                 }
                             )
+                        }
+
+                        item {
+                            GrokLoggerPanel(logs = logs)
                         }
 
                         // Local Conversations Search and Browser
@@ -254,6 +486,10 @@ fun DashboardScreen(viewModel: GrokViewModel) {
                                 onRetry = { viewModel.resetState() }
                             )
                         }
+
+                        item {
+                            GrokLoggerPanel(logs = logs)
+                        }
                     }
                 }
             }
@@ -305,12 +541,16 @@ fun HeroBanner() {
 }
 
 @Composable
-fun ImportLauncherCard(onLaunchPicker: () -> Unit) {
+fun ImportLauncherCard(
+    jobLabelInput: String,
+    onJobLabelChange: (String) -> Unit,
+    onLaunchPicker: () -> Unit,
+    onLoadDemo: () -> Unit
+) {
     Card(
         modifier = Modifier
             .fillMaxWidth()
-            .border(1.dp, CyberCyan.copy(alpha = 0.3f), RoundedCornerShape(16.dp))
-            .clickable { onLaunchPicker() },
+            .border(1.dp, CyberCyan.copy(alpha = 0.3f), RoundedCornerShape(16.dp)),
         colors = CardDefaults.cardColors(containerColor = CyberSurface),
         shape = RoundedCornerShape(16.dp)
     ) {
@@ -342,13 +582,59 @@ fun ImportLauncherCard(onLaunchPicker: () -> Unit) {
                 textAlign = TextAlign.Center
             )
             Spacer(modifier = Modifier.height(16.dp))
+
+            // Job label text field inside File Importer UI
+            OutlinedTextField(
+                value = jobLabelInput,
+                onValueChange = onJobLabelChange,
+                label = { Text("Processing Job Label (Optional)", color = CyberTextMuted, fontSize = 12.sp) },
+                placeholder = { Text("e.g. Astro-Bio Analysis", color = CyberTextMuted, fontSize = 12.sp) },
+                modifier = Modifier
+                    .fillMaxWidth(0.9f)
+                    .testTag("job_label_input"),
+                colors = OutlinedTextFieldDefaults.colors(
+                    focusedBorderColor = CyberCyan,
+                    unfocusedBorderColor = CyberBorder,
+                    focusedLabelColor = CyberCyan,
+                    focusedTextColor = CyberText,
+                    unfocusedTextColor = CyberText,
+                    unfocusedContainerColor = CyberBg,
+                    focusedContainerColor = CyberBg
+                ),
+                singleLine = true,
+                shape = RoundedCornerShape(10.dp)
+            )
+
+            Spacer(modifier = Modifier.height(16.dp))
             Button(
                 onClick = onLaunchPicker,
                 colors = ButtonDefaults.buttonColors(containerColor = CyberCyan, contentColor = CyberBg),
                 shape = RoundedCornerShape(12.dp),
-                modifier = Modifier.testTag("select_file_button")
+                modifier = Modifier.fillMaxWidth(0.8f).testTag("select_file_button")
             ) {
                 Text("Browse Files", fontWeight = FontWeight.Bold)
+            }
+
+            Spacer(modifier = Modifier.height(12.dp))
+            Text(
+                text = "— OR —",
+                fontSize = 11.sp,
+                fontWeight = FontWeight.Bold,
+                color = CyberTextMuted
+            )
+            Spacer(modifier = Modifier.height(12.dp))
+            Button(
+                onClick = onLoadDemo,
+                colors = ButtonDefaults.buttonColors(containerColor = CyberSurface, contentColor = CyberCyan),
+                shape = RoundedCornerShape(12.dp),
+                modifier = Modifier
+                    .fillMaxWidth(0.8f)
+                    .border(1.dp, CyberCyan, RoundedCornerShape(12.dp))
+                    .testTag("load_sample_button")
+            ) {
+                Icon(Icons.Default.PlayArrow, contentDescription = null, modifier = Modifier.size(16.dp))
+                Spacer(modifier = Modifier.width(8.dp))
+                Text("Load Sample Dataset", fontWeight = FontWeight.Bold)
             }
         }
     }
@@ -885,3 +1171,1015 @@ fun shareExportedFile(context: Context, fileUri: Uri) {
     }
     context.startActivity(Intent.createChooser(intent, "Share Decoded xAI Grok Package"))
 }
+
+@Composable
+fun GrokLoggerPanel(logs: List<String>) {
+    var isExpanded by remember { mutableStateOf(true) }
+    Card(
+        modifier = Modifier
+            .fillMaxWidth()
+            .border(1.dp, CyberBorder, RoundedCornerShape(12.dp)),
+        colors = CardDefaults.cardColors(containerColor = CyberSurface),
+        shape = RoundedCornerShape(12.dp)
+    ) {
+        Column(modifier = Modifier.padding(14.dp)) {
+            Row(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .clickable { isExpanded = !isExpanded },
+                horizontalArrangement = Arrangement.SpaceBetween,
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Icon(
+                        imageVector = Icons.Default.Code,
+                        contentDescription = null,
+                        tint = CyberCyan,
+                        modifier = Modifier.size(18.dp)
+                    )
+                    Spacer(modifier = Modifier.width(8.dp))
+                    Text(
+                        text = "Real-Time Action Logs",
+                        fontWeight = FontWeight.Bold,
+                        color = CyberText,
+                        fontSize = 13.sp
+                    )
+                }
+                Icon(
+                    imageVector = if (isExpanded) Icons.Default.ExpandLess else Icons.Default.ExpandMore,
+                    contentDescription = null,
+                    tint = CyberCyan,
+                    modifier = Modifier.size(18.dp)
+                )
+            }
+            AnimatedVisibility(visible = isExpanded) {
+                Column(modifier = Modifier.padding(top = 10.dp)) {
+                    Box(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .height(140.dp)
+                            .background(CyberBg, RoundedCornerShape(8.dp))
+                            .border(1.dp, CyberBorder, RoundedCornerShape(8.dp))
+                            .padding(8.dp)
+                    ) {
+                        LazyColumn(
+                            modifier = Modifier.fillMaxSize(),
+                            verticalArrangement = Arrangement.spacedBy(4.dp)
+                        ) {
+                            if (logs.isEmpty()) {
+                                item {
+                                    Text(
+                                        text = "[SYSTEM IDLE] Waiting for extraction request...",
+                                        fontFamily = FontFamily.Monospace,
+                                        fontSize = 10.sp,
+                                        color = CyberTextMuted
+                                    )
+                                }
+                            } else {
+                                items(logs) { log ->
+                                    val isError = log.contains("[ERROR]")
+                                    val isWarning = log.contains("[WARN]")
+                                    val textColor = when {
+                                        isError -> CyberOrange
+                                        isWarning -> Color.Yellow
+                                        else -> CyberTextMuted
+                                    }
+                                    Text(
+                                        text = log,
+                                        fontFamily = FontFamily.Monospace,
+                                        fontSize = 10.sp,
+                                        color = textColor
+                                    )
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
+
+@Composable
+fun IntegrityVerificationCard(validationMatched: Boolean, sha256Checksum: String) {
+    Card(
+        modifier = Modifier
+            .fillMaxWidth()
+            .border(
+                1.dp,
+                if (validationMatched) CyberCyan.copy(alpha = 0.6f) else CyberOrange.copy(alpha = 0.6f),
+                RoundedCornerShape(16.dp)
+            ),
+        colors = CardDefaults.cardColors(containerColor = CyberSurface),
+        shape = RoundedCornerShape(16.dp)
+    ) {
+        Column(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(16.dp)
+        ) {
+            Row(
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                Icon(
+                    imageVector = Icons.Default.Security,
+                    contentDescription = null,
+                    tint = if (validationMatched) CyberCyan else CyberOrange,
+                    modifier = Modifier.size(22.dp)
+                )
+                Spacer(modifier = Modifier.width(8.dp))
+                Text(
+                    text = if (validationMatched) "CRYPTOGRAPHIC INTEGRITY CONFIRMED" else "INTEGRITY VALIDATION MISMATCH",
+                    fontWeight = FontWeight.Bold,
+                    fontSize = 13.sp,
+                    color = if (validationMatched) CyberCyan else CyberOrange
+                )
+            }
+            Spacer(modifier = Modifier.height(12.dp))
+            Text(
+                text = "Reassembly engine normalized, parsed, sliced, and verified the parsed JSON tree byte-for-byte against skeletal remains using SHA-256 hashing. The match confirms zero-loss data replication.",
+                fontSize = 11.sp,
+                color = CyberTextMuted
+            )
+            Spacer(modifier = Modifier.height(10.dp))
+            Text(
+                text = "SHA-256 Checksum Hash:",
+                fontWeight = FontWeight.SemiBold,
+                fontSize = 11.sp,
+                color = CyberText
+            )
+            Text(
+                text = sha256Checksum,
+                fontFamily = FontFamily.Monospace,
+                fontSize = 10.sp,
+                color = CyberCyan,
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .background(CyberBg, RoundedCornerShape(4.dp))
+                    .padding(6.dp)
+            )
+        }
+    }
+}
+
+@Composable
+fun HelpGuideDialog(onDismiss: () -> Unit) {
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        confirmButton = {
+            TextButton(onClick = onDismiss) {
+                Text("Dismiss", color = CyberCyan, fontWeight = FontWeight.Bold)
+            }
+        },
+        title = {
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Icon(Icons.Default.Help, contentDescription = null, tint = CyberCyan)
+                Spacer(modifier = Modifier.width(8.dp))
+                Text("xAI Grok Schema Guide", color = CyberText, fontSize = 16.sp)
+            }
+        },
+        text = {
+            LazyColumn(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .height(350.dp),
+                verticalArrangement = Arrangement.spacedBy(12.dp)
+            ) {
+                item {
+                    Text(
+                        text = "Parsing Strategy & Architecture",
+                        fontWeight = FontWeight.Bold,
+                        color = CyberCyan,
+                        fontSize = 13.sp
+                    )
+                    Text(
+                        text = "This application handles giant xAI export data files up to 4.9 GB by avoiding loading the whole JSON tree into memory at once. Instead, it utilizes an incremental Jackson-style Token Streaming Reader (Android's JsonReader) over the Input Stream directly. This consumes negligible memory (less than 20MB) and operates offline safely on Pixel-grade mobile devices.",
+                        fontSize = 12.sp,
+                        color = CyberTextMuted
+                    )
+                }
+                item {
+                    Text(
+                        text = "1. Supported Schemas & JSON Layouts",
+                        fontWeight = FontWeight.Bold,
+                        color = CyberCyan,
+                        fontSize = 13.sp
+                    )
+                    Text(
+                        text = "The parser automatically detects and reads both standard Flat List format [ { id, title, messages: [] } ] and Nested root attributes { conversations: [...] }.",
+                        fontSize = 12.sp,
+                        color = CyberTextMuted
+                    )
+                }
+                item {
+                    Text(
+                        text = "2. Skeletal Remains & Integrity Validation",
+                        fontWeight = FontWeight.Bold,
+                        color = CyberCyan,
+                        fontSize = 13.sp
+                    )
+                    Text(
+                        text = "The app slices individual chats while saving 'skeletal remains' metadata of the original. To guarantee zero loss, it re-aligns sliced conversations with skeletal bones and runs a cryptographic SHA-256 byte-for-byte check.",
+                        fontSize = 12.sp,
+                        color = CyberTextMuted
+                    )
+                }
+                item {
+                    Text(
+                        text = "3. Decoding Hex Binary Assets",
+                        fontWeight = FontWeight.Bold,
+                        color = CyberCyan,
+                        fontSize = 13.sp
+                    )
+                    Text(
+                        text = "Inline assets (images/audio/documents) found as hex structures are cleanly decoded into binary files with accurate file extension detection.",
+                        fontSize = 12.sp,
+                        color = CyberTextMuted
+                    )
+                }
+            }
+        },
+        containerColor = CyberBg,
+        shape = RoundedCornerShape(16.dp)
+    )
+}
+
+@Composable
+fun ProcessingJobsHistoryCard(
+    jobs: List<GrokJob>,
+    onViewLogs: (GrokJob) -> Unit,
+    onViewReports: (GrokJob) -> Unit,
+    onShareZip: (GrokJob) -> Unit,
+    onDeleteJob: (GrokJob) -> Unit,
+    onClearAll: () -> Unit
+) {
+    Card(
+        modifier = Modifier
+            .fillMaxWidth()
+            .border(1.dp, CyberBorder, RoundedCornerShape(16.dp))
+            .testTag("jobs_history_card"),
+        colors = CardDefaults.cardColors(containerColor = CyberSurface),
+        shape = RoundedCornerShape(16.dp)
+    ) {
+        Column(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(16.dp)
+        ) {
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.SpaceBetween,
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                Text(
+                    text = "Extraction Jobs Archive",
+                    fontWeight = FontWeight.Bold,
+                    fontSize = 15.sp,
+                    color = CyberCyan
+                )
+                if (jobs.isNotEmpty()) {
+                    TextButton(onClick = onClearAll) {
+                        Text("Clear All", color = CyberOrange, fontSize = 12.sp)
+                    }
+                }
+            }
+            Spacer(modifier = Modifier.height(12.dp))
+
+            if (jobs.isEmpty()) {
+                Box(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(24.dp),
+                    contentAlignment = Alignment.Center
+                ) {
+                    Text(
+                        text = "No archived jobs found. Prepare an import to initiate a job.",
+                        color = CyberTextMuted,
+                        fontSize = 13.sp,
+                        textAlign = TextAlign.Center
+                    )
+                }
+            } else {
+                LazyColumn(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .heightIn(max = 350.dp),
+                    verticalArrangement = Arrangement.spacedBy(10.dp)
+                ) {
+                    items(jobs) { job ->
+                        JobHistoryItem(
+                            job = job,
+                            onViewLogs = { onViewLogs(job) },
+                            onViewReports = { onViewReports(job) },
+                            onShareZip = { onShareZip(job) },
+                            onDelete = { onDeleteJob(job) }
+                        )
+                    }
+                }
+            }
+        }
+    }
+}
+
+@Composable
+fun JobHistoryItem(
+    job: GrokJob,
+    onViewLogs: () -> Unit,
+    onViewReports: () -> Unit,
+    onShareZip: () -> Unit,
+    onDelete: () -> Unit
+) {
+    val dateStr = SimpleDateFormat("MMM d, yyyy HH:mm:ss", Locale.getDefault()).format(Date(job.timestamp))
+
+    Column(
+        modifier = Modifier
+            .fillMaxWidth()
+            .background(CyberBg, RoundedCornerShape(12.dp))
+            .border(1.dp, CyberBorder, RoundedCornerShape(12.dp))
+            .padding(12.dp)
+    ) {
+        Row(
+            modifier = Modifier.fillMaxWidth(),
+            horizontalArrangement = Arrangement.SpaceBetween,
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Box(
+                    modifier = Modifier
+                        .background(CyberBorder, RoundedCornerShape(6.dp))
+                        .padding(horizontal = 6.dp, vertical = 2.dp)
+                ) {
+                    Text(
+                        text = "#${job.number}",
+                        fontWeight = FontWeight.Bold,
+                        color = CyberCyan,
+                        fontSize = 11.sp
+                    )
+                }
+                Spacer(modifier = Modifier.width(8.dp))
+                Text(
+                    text = job.label,
+                    fontWeight = FontWeight.SemiBold,
+                    color = CyberText,
+                    fontSize = 14.sp,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
+                    modifier = Modifier.widthIn(max = 140.dp)
+                )
+            }
+
+            val badgeBg = when (job.status) {
+                "COMPLETED" -> CyberCyan.copy(alpha = 0.15f)
+                "FAILED" -> CyberOrange.copy(alpha = 0.15f)
+                else -> Color.Yellow.copy(alpha = 0.15f)
+            }
+            val badgeColor = when (job.status) {
+                "COMPLETED" -> CyberCyan
+                "FAILED" -> CyberOrange
+                else -> Color.Yellow
+            }
+            Box(
+                modifier = Modifier
+                    .background(badgeBg, RoundedCornerShape(6.dp))
+                    .padding(horizontal = 6.dp, vertical = 2.dp)
+            ) {
+                Text(
+                    text = job.status,
+                    fontWeight = FontWeight.Bold,
+                    color = badgeColor,
+                    fontSize = 10.sp
+                )
+            }
+        }
+
+        Spacer(modifier = Modifier.height(4.dp))
+        Text(
+            text = dateStr,
+            fontSize = 11.sp,
+            color = CyberTextMuted
+        )
+
+        if (job.status == "COMPLETED") {
+            Spacer(modifier = Modifier.height(8.dp))
+            Text(
+                text = "Chats: ${job.totalConversations} | Size: ${(job.totalCharacters / 1024.0).toInt()} KB | Binaries: ${job.binaryFilesProcessed} (Decoded: ${job.hexFilesDecoded})",
+                fontSize = 11.sp,
+                color = CyberTextMuted
+            )
+        }
+
+        Spacer(modifier = Modifier.height(10.dp))
+        Divider(color = CyberBorder.copy(alpha = 0.5f))
+        Spacer(modifier = Modifier.height(8.dp))
+
+        Row(
+            modifier = Modifier.fillMaxWidth(),
+            horizontalArrangement = Arrangement.SpaceBetween,
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                TextButton(
+                    onClick = onViewLogs,
+                    contentPadding = PaddingValues(horizontal = 8.dp, vertical = 2.dp),
+                    modifier = Modifier.height(28.dp)
+                ) {
+                    Icon(Icons.Default.List, contentDescription = null, modifier = Modifier.size(14.dp), tint = CyberCyan)
+                    Spacer(modifier = Modifier.width(4.dp))
+                    Text("Logs", color = CyberCyan, fontSize = 11.sp)
+                }
+
+                if (job.status == "COMPLETED") {
+                    TextButton(
+                        onClick = onViewReports,
+                        contentPadding = PaddingValues(horizontal = 8.dp, vertical = 2.dp),
+                        modifier = Modifier.height(28.dp)
+                    ) {
+                        Icon(Icons.Default.Security, contentDescription = null, modifier = Modifier.size(14.dp), tint = CyberCyan)
+                        Spacer(modifier = Modifier.width(4.dp))
+                        Text("Integrity", color = CyberCyan, fontSize = 11.sp)
+                    }
+
+                    val zipFile = File(job.folderPath, "grok_processed_export.zip")
+                    if (zipFile.exists()) {
+                        TextButton(
+                            onClick = onShareZip,
+                            contentPadding = PaddingValues(horizontal = 8.dp, vertical = 2.dp),
+                            modifier = Modifier.height(28.dp)
+                        ) {
+                            Icon(Icons.Default.Share, contentDescription = null, modifier = Modifier.size(14.dp), tint = CyberCyan)
+                            Spacer(modifier = Modifier.width(4.dp))
+                            Text("ZIP", color = CyberCyan, fontSize = 11.sp)
+                        }
+                    }
+                }
+            }
+
+            IconButton(
+                onClick = onDelete,
+                modifier = Modifier.size(28.dp)
+            ) {
+                Icon(Icons.Default.Delete, contentDescription = "Delete Job", tint = CyberOrange.copy(alpha = 0.7f), modifier = Modifier.size(16.dp))
+            }
+        }
+    }
+}
+
+@Composable
+fun AdvancedDashboardTogglesCard(viewModel: GrokViewModel) {
+    val preserveFileDates by viewModel.preserveFileDates.collectAsState()
+    val enableObsidianFrontMatter by viewModel.enableObsidianFrontMatter.collectAsState()
+    val obsidianIncludeTitle by viewModel.obsidianIncludeTitle.collectAsState()
+    val obsidianIncludeDate by viewModel.obsidianIncludeDate.collectAsState()
+    val obsidianIncludeId by viewModel.obsidianIncludeId.collectAsState()
+    val obsidianIncludeStats by viewModel.obsidianIncludeStats.collectAsState()
+    val obsidianIncludeTags by viewModel.obsidianIncludeTags.collectAsState()
+    
+    val timeFrameGapHours by viewModel.timeFrameGapHours.collectAsState()
+    val enableLineNumbers by viewModel.enableLineNumbers.collectAsState()
+    
+    val enableBatchMode by viewModel.enableBatchMode.collectAsState()
+    val batchSize by viewModel.batchSize.collectAsState()
+    val isTestRun by viewModel.isTestRun.collectAsState()
+
+    Card(
+        modifier = Modifier
+            .fillMaxWidth()
+            .border(1.dp, CyberBorder, RoundedCornerShape(16.dp)),
+        colors = CardDefaults.cardColors(containerColor = CyberSurface),
+        shape = RoundedCornerShape(16.dp)
+    ) {
+        Column(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(16.dp)
+        ) {
+            Text(
+                text = "Advanced Extraction Controls",
+                fontWeight = FontWeight.Bold,
+                fontSize = 15.sp,
+                color = CyberCyan
+            )
+            Spacer(modifier = Modifier.height(12.dp))
+
+            // Date preservation toggle
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.SpaceBetween,
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                Column(modifier = Modifier.weight(1f)) {
+                    Text("Preserve File Date/Time", color = CyberText, fontSize = 13.sp, fontWeight = FontWeight.SemiBold)
+                    Text("Sets the file modification timestamps off the chat record natural time rather than system time.", color = CyberTextMuted, fontSize = 11.sp)
+                }
+                Switch(
+                    checked = preserveFileDates,
+                    onCheckedChange = { viewModel.preserveFileDates.value = it },
+                    colors = SwitchDefaults.colors(checkedThumbColor = CyberBg, checkedTrackColor = CyberCyan)
+                )
+            }
+            Spacer(modifier = Modifier.height(12.dp))
+            Divider(color = CyberBorder)
+            Spacer(modifier = Modifier.height(12.dp))
+
+            // Obsidian Markdown Front Matter
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.SpaceBetween,
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                Column(modifier = Modifier.weight(1f)) {
+                    Text("Obsidian Front Matter", color = CyberText, fontSize = 13.sp, fontWeight = FontWeight.SemiBold)
+                    Text("Inject yaml meta block at start of transcripts.", color = CyberTextMuted, fontSize = 11.sp)
+                }
+                Switch(
+                    checked = enableObsidianFrontMatter,
+                    onCheckedChange = { viewModel.enableObsidianFrontMatter.value = it },
+                    colors = SwitchDefaults.colors(checkedThumbColor = CyberBg, checkedTrackColor = CyberCyan)
+                )
+            }
+
+            if (enableObsidianFrontMatter) {
+                Column(modifier = Modifier.padding(start = 12.dp, top = 8.dp)) {
+                    CheckboxRow(label = "Include title attribute", checked = obsidianIncludeTitle, onCheckedChange = { viewModel.obsidianIncludeTitle.value = it })
+                    CheckboxRow(label = "Include timestamp date", checked = obsidianIncludeDate, onCheckedChange = { viewModel.obsidianIncludeDate.value = it })
+                    CheckboxRow(label = "Include conversation ID", checked = obsidianIncludeId, onCheckedChange = { viewModel.obsidianIncludeId.value = it })
+                    CheckboxRow(label = "Include message count statistics", checked = obsidianIncludeStats, onCheckedChange = { viewModel.obsidianIncludeStats.value = it })
+                    CheckboxRow(label = "Include #grok tag markers", checked = obsidianIncludeTags, onCheckedChange = { viewModel.obsidianIncludeTags.value = it })
+                }
+            }
+            
+            Spacer(modifier = Modifier.height(12.dp))
+            Divider(color = CyberBorder)
+            Spacer(modifier = Modifier.height(12.dp))
+
+            // Timeframe segments & line numbering
+            Text("Transcript Layouts", color = CyberText, fontSize = 13.sp, fontWeight = FontWeight.SemiBold)
+            Spacer(modifier = Modifier.height(8.dp))
+            CheckboxRow(label = "Inject absolute line numbering in markdown blocks", checked = enableLineNumbers, onCheckedChange = { viewModel.enableLineNumbers.value = it })
+            
+            Spacer(modifier = Modifier.height(8.dp))
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.SpaceBetween
+            ) {
+                Text("Segment Break Gap Window:", color = CyberTextMuted, fontSize = 12.sp)
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    IconButton(onClick = { if (timeFrameGapHours > 1) viewModel.timeFrameGapHours.value = timeFrameGapHours - 1 }) {
+                        Icon(Icons.Default.Remove, contentDescription = null, tint = CyberCyan, modifier = Modifier.size(16.dp))
+                    }
+                    Text("${timeFrameGapHours} hours", color = CyberCyan, fontSize = 12.sp, fontWeight = FontWeight.Bold)
+                    IconButton(onClick = { viewModel.timeFrameGapHours.value = timeFrameGapHours + 1 }) {
+                        Icon(Icons.Default.Add, contentDescription = null, tint = CyberCyan, modifier = Modifier.size(16.dp))
+                    }
+                }
+            }
+
+            Spacer(modifier = Modifier.height(12.dp))
+            Divider(color = CyberBorder)
+            Spacer(modifier = Modifier.height(12.dp))
+
+            // Batch processor toggles
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.SpaceBetween,
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                Column(modifier = Modifier.weight(1f)) {
+                    Text("Incremental Batch Processor Mode", color = CyberText, fontSize = 13.sp, fontWeight = FontWeight.SemiBold)
+                    Text("Cycles through raw dataset slices without OOM limits.", color = CyberTextMuted, fontSize = 11.sp)
+                }
+                Switch(
+                    checked = enableBatchMode,
+                    onCheckedChange = { viewModel.enableBatchMode.value = it },
+                    colors = SwitchDefaults.colors(checkedThumbColor = CyberBg, checkedTrackColor = CyberCyan)
+                )
+            }
+
+            if (enableBatchMode) {
+                Column(modifier = Modifier.padding(start = 12.dp, top = 8.dp)) {
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.SpaceBetween
+                    ) {
+                        Text("Slice Batch Size limit:", color = CyberTextMuted, fontSize = 12.sp)
+                        Row(verticalAlignment = Alignment.CenterVertically) {
+                            IconButton(onClick = { if (batchSize > 1) viewModel.batchSize.value = batchSize - 1 }) {
+                                Icon(Icons.Default.Remove, contentDescription = null, tint = CyberCyan, modifier = Modifier.size(16.dp))
+                            }
+                            Text("${batchSize} chats", color = CyberCyan, fontSize = 12.sp, fontWeight = FontWeight.Bold)
+                            IconButton(onClick = { viewModel.batchSize.value = batchSize + 1 }) {
+                                Icon(Icons.Default.Add, contentDescription = null, tint = CyberCyan, modifier = Modifier.size(16.dp))
+                            }
+                        }
+                    }
+                    
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.SpaceBetween
+                    ) {
+                        Column(modifier = Modifier.weight(1f)) {
+                            Text("Suggest Test Run Slice", color = CyberText, fontSize = 12.sp, fontWeight = FontWeight.Medium)
+                            Text("Process only initial 2 conversations first.", color = CyberTextMuted, fontSize = 11.sp)
+                        }
+                        Checkbox(
+                            checked = isTestRun,
+                            onCheckedChange = { viewModel.isTestRun.value = it },
+                            colors = CheckboxDefaults.colors(checkedColor = CyberCyan, checkmarkColor = CyberBg)
+                        )
+                    }
+                }
+            }
+        }
+    }
+}
+
+@Composable
+fun BatchConsoleCard(viewModel: GrokViewModel) {
+    val context = LocalContext.current
+    val currentBatchIndex by viewModel.currentBatchIndex.collectAsState()
+    val totalBatches by viewModel.totalBatches.collectAsState()
+    val batchProcessingStatus by viewModel.batchProcessingStatus.collectAsState()
+    val isTestRun by viewModel.isTestRun.collectAsState()
+
+    Card(
+        modifier = Modifier
+            .fillMaxWidth()
+            .border(1.dp, CyberCyan, RoundedCornerShape(16.dp)),
+        colors = CardDefaults.cardColors(containerColor = CyberSurface),
+        shape = RoundedCornerShape(16.dp)
+    ) {
+        Column(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(16.dp),
+            horizontalAlignment = Alignment.CenterHorizontally
+        ) {
+            Text(
+                text = "BATCH RUN CONSOLE",
+                fontWeight = FontWeight.Bold,
+                fontSize = 14.sp,
+                color = CyberCyan
+            )
+            Spacer(modifier = Modifier.height(8.dp))
+            
+            Text(
+                text = "Status: ${batchProcessingStatus}",
+                fontWeight = FontWeight.SemiBold,
+                fontSize = 12.sp,
+                color = if (batchProcessingStatus == "PROCESSING") Color.Yellow else CyberCyan
+            )
+            Spacer(modifier = Modifier.height(12.dp))
+
+            // Visual ProgressBar
+            val progress = if (totalBatches > 0) (currentBatchIndex.toFloat() / totalBatches.toFloat()) else 0f
+            Box(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .height(8.dp)
+                    .background(CyberBg, RoundedCornerShape(4.dp))
+                    .border(1.dp, CyberBorder, RoundedCornerShape(4.dp))
+            ) {
+                Box(
+                    modifier = Modifier
+                        .fillMaxHeight()
+                        .fillMaxWidth(progress)
+                        .background(CyberCyan, RoundedCornerShape(4.dp))
+                )
+            }
+            Spacer(modifier = Modifier.height(8.dp))
+            
+            Text(
+                text = "Batch Cycle ${currentBatchIndex} of ${totalBatches} Slices",
+                fontSize = 12.sp,
+                color = CyberTextMuted
+            )
+
+            Spacer(modifier = Modifier.height(16.dp))
+            
+            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                Button(
+                    onClick = { viewModel.startBatchCycles(context) },
+                    colors = ButtonDefaults.buttonColors(containerColor = CyberCyan, contentColor = CyberBg),
+                    shape = RoundedCornerShape(10.dp),
+                    enabled = batchProcessingStatus != "PROCESSING",
+                    modifier = Modifier.weight(1f)
+                ) {
+                    Icon(Icons.Default.PlayArrow, contentDescription = null, modifier = Modifier.size(16.dp))
+                    Spacer(modifier = Modifier.width(6.dp))
+                    Text(if (isTestRun) "Run Test Batch" else "Cycle Batches", fontWeight = FontWeight.Bold, fontSize = 12.sp)
+                }
+
+                Button(
+                    onClick = { viewModel.resetState() },
+                    colors = ButtonDefaults.buttonColors(containerColor = CyberBg, contentColor = CyberOrange),
+                    shape = RoundedCornerShape(10.dp),
+                    enabled = batchProcessingStatus != "PROCESSING",
+                    modifier = Modifier.weight(1f).border(1.dp, CyberOrange, RoundedCornerShape(10.dp))
+                ) {
+                    Text("Abort", fontWeight = FontWeight.Bold, fontSize = 12.sp)
+                }
+            }
+        }
+    }
+}
+
+@Composable
+fun VisualizationsDashboardCard(conversations: List<Conversation>) {
+    Card(
+        modifier = Modifier
+            .fillMaxWidth()
+            .border(1.dp, CyberBorder, RoundedCornerShape(16.dp)),
+        colors = CardDefaults.cardColors(containerColor = CyberSurface),
+        shape = RoundedCornerShape(16.dp)
+    ) {
+        Column(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(16.dp)
+        ) {
+            Text(
+                text = "Interactive Analytics Dashboard",
+                fontWeight = FontWeight.Bold,
+                fontSize = 14.sp,
+                color = CyberCyan
+            )
+            Spacer(modifier = Modifier.height(12.dp))
+
+            val totalMessages = conversations.sumOf { it.messages.size }
+            val avgMsgs = if (conversations.isNotEmpty()) totalMessages / conversations.size else 0
+
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.SpaceBetween
+            ) {
+                Column {
+                    Text("Total Chats", color = CyberTextMuted, fontSize = 11.sp)
+                    Text("${conversations.size}", color = CyberCyan, fontSize = 18.sp, fontWeight = FontWeight.Bold)
+                }
+                Column {
+                    Text("Total Messages", color = CyberTextMuted, fontSize = 11.sp)
+                    Text("${totalMessages}", color = CyberOrange, fontSize = 18.sp, fontWeight = FontWeight.Bold)
+                }
+                Column {
+                    Text("Avg Messages/Chat", color = CyberTextMuted, fontSize = 11.sp)
+                    Text("${avgMsgs}", color = CyberCyan, fontSize = 18.sp, fontWeight = FontWeight.Bold)
+                }
+            }
+
+            Spacer(modifier = Modifier.height(16.dp))
+            Divider(color = CyberBorder)
+            Spacer(modifier = Modifier.height(12.dp))
+
+            Text(
+                text = "Volume Distribution Breakdown",
+                fontWeight = FontWeight.SemiBold,
+                fontSize = 12.sp,
+                color = CyberText
+            )
+            Spacer(modifier = Modifier.height(8.dp))
+
+            conversations.take(5).forEach { chat ->
+                val msgCount = chat.messages.size
+                val visualPercentage = if (totalMessages > 0) (msgCount.toFloat() / totalMessages.toFloat()).coerceIn(0.1f, 1.0f) else 0.1f
+                
+                Column(modifier = Modifier.padding(vertical = 4.dp)) {
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.SpaceBetween
+                    ) {
+                        Text(
+                            text = chat.title.ifBlank { "Untitled Chat" },
+                            fontSize = 11.sp,
+                            color = CyberTextMuted,
+                            maxLines = 1,
+                            overflow = TextOverflow.Ellipsis,
+                            modifier = Modifier.weight(1f)
+                        )
+                        Text("${msgCount} msgs", fontSize = 11.sp, color = CyberCyan, fontWeight = FontWeight.Bold)
+                    }
+                    Spacer(modifier = Modifier.height(2.dp))
+                    Box(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .height(6.dp)
+                            .background(CyberBg, RoundedCornerShape(3.dp))
+                    ) {
+                        Box(
+                            modifier = Modifier
+                                .fillMaxHeight()
+                                .fillMaxWidth(visualPercentage)
+                                .background(
+                                    brush = Brush.horizontalGradient(listOf(CyberCyan, CyberOrange)),
+                                    shape = RoundedCornerShape(3.dp)
+                                )
+                        )
+                    }
+                }
+            }
+        }
+    }
+}
+
+@Composable
+fun RecursiveBinarySearchCard(viewModel: GrokViewModel) {
+    val context = LocalContext.current
+    val minedBinaries by viewModel.minedBinaries.collectAsState()
+    val isSearchingBinaries by viewModel.isSearchingBinaries.collectAsState()
+
+    Card(
+        modifier = Modifier
+            .fillMaxWidth()
+            .border(1.dp, CyberBorder, RoundedCornerShape(16.dp)),
+        colors = CardDefaults.cardColors(containerColor = CyberSurface),
+        shape = RoundedCornerShape(16.dp)
+    ) {
+        Column(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(16.dp)
+        ) {
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.SpaceBetween,
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                Text(
+                    text = "Recursive Binary Scanner",
+                    fontWeight = FontWeight.Bold,
+                    fontSize = 14.sp,
+                    color = CyberCyan
+                )
+                
+                if (isSearchingBinaries) {
+                    CircularProgressIndicator(color = CyberCyan, modifier = Modifier.size(16.dp))
+                } else {
+                    Button(
+                        onClick = { viewModel.triggerRecursiveBinarySearch(context) },
+                        colors = ButtonDefaults.buttonColors(containerColor = CyberBg, contentColor = CyberCyan),
+                        modifier = Modifier.height(30.dp).border(1.dp, CyberCyan, RoundedCornerShape(8.dp)),
+                        contentPadding = PaddingValues(horizontal = 8.dp, vertical = 2.dp),
+                        shape = RoundedCornerShape(8.dp)
+                    ) {
+                        Text("Deep Scan", fontSize = 11.sp, fontWeight = FontWeight.Bold)
+                    }
+                }
+            }
+            Spacer(modifier = Modifier.height(8.dp))
+            Text(
+                text = "Scans all job subfolders and underlying asset chains for binary artifacts and image content types.",
+                fontSize = 11.sp,
+                color = CyberTextMuted
+            )
+            
+            if (minedBinaries.isNotEmpty()) {
+                Spacer(modifier = Modifier.height(12.dp))
+                Divider(color = CyberBorder)
+                Spacer(modifier = Modifier.height(8.dp))
+                
+                Text(
+                    text = "Discovered Assets (${minedBinaries.size})",
+                    fontSize = 12.sp,
+                    fontWeight = FontWeight.SemiBold,
+                    color = CyberText
+                )
+                Spacer(modifier = Modifier.height(6.dp))
+
+                Box(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .heightIn(max = 150.dp)
+                ) {
+                    LazyColumn(modifier = Modifier.fillMaxWidth()) {
+                        items(minedBinaries) { binary ->
+                            Row(
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .padding(vertical = 4.dp)
+                                    .background(CyberBg, RoundedCornerShape(6.dp))
+                                    .padding(8.dp),
+                                horizontalArrangement = Arrangement.SpaceBetween,
+                                verticalAlignment = Alignment.CenterVertically
+                            ) {
+                                Column(modifier = Modifier.weight(1f)) {
+                                    Text(binary.name, color = CyberText, fontSize = 12.sp, fontWeight = FontWeight.Medium, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                                    Text("Type: ${binary.mimeType} • Size: ${(binary.size / 1024.0).toInt()} KB", color = CyberTextMuted, fontSize = 10.sp)
+                                    Text("SHA256: ${binary.sha256.take(16)}...", fontFamily = FontFamily.Monospace, color = CyberCyan, fontSize = 9.sp)
+                                }
+                                if (binary.details.isNotBlank()) {
+                                    Box(
+                                        modifier = Modifier
+                                            .background(CyberBorder, RoundedCornerShape(4.dp))
+                                            .padding(horizontal = 4.dp, vertical = 2.dp)
+                                    ) {
+                                        Text(binary.details, color = CyberOrange, fontSize = 9.sp, fontWeight = FontWeight.Bold)
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
+
+@Composable
+fun AutoBackupHistoryCard(viewModel: GrokViewModel) {
+    val context = LocalContext.current
+    val backupsList by viewModel.backupsList.collectAsState()
+
+    LaunchedEffect(Unit) {
+        viewModel.loadAllBackups(context)
+    }
+
+    Card(
+        modifier = Modifier
+            .fillMaxWidth()
+            .border(1.dp, CyberBorder, RoundedCornerShape(16.dp)),
+        colors = CardDefaults.cardColors(containerColor = CyberSurface),
+        shape = RoundedCornerShape(16.dp)
+    ) {
+        Column(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(16.dp)
+        ) {
+            Text(
+                text = "Auto-Backup Vault",
+                fontWeight = FontWeight.Bold,
+                fontSize = 14.sp,
+                color = CyberCyan
+            )
+            Spacer(modifier = Modifier.height(4.dp))
+            Text(
+                text = "Stores copy snapshots of compiled ZIP archives inside secure sandboxed file space.",
+                fontSize = 11.sp,
+                color = CyberTextMuted
+            )
+            
+            Spacer(modifier = Modifier.height(12.dp))
+
+            if (backupsList.isEmpty()) {
+                Box(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(16.dp),
+                    contentAlignment = Alignment.Center
+                ) {
+                    Text("No automated backup snapshots generated yet.", color = CyberTextMuted, fontSize = 12.sp)
+                }
+            } else {
+                LazyColumn(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .heightIn(max = 160.dp),
+                    verticalArrangement = Arrangement.spacedBy(8.dp)
+                ) {
+                    items(backupsList) { file ->
+                        val date = Date(file.lastModified())
+                        val dateStr = SimpleDateFormat("MMM d, HH:mm:ss", Locale.getDefault()).format(date)
+
+                        Row(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .background(CyberBg, RoundedCornerShape(8.dp))
+                                .border(1.dp, CyberBorder, RoundedCornerShape(8.dp))
+                                .padding(8.dp),
+                            horizontalArrangement = Arrangement.SpaceBetween,
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            Column(modifier = Modifier.weight(1f)) {
+                                Text(file.name, color = CyberText, fontSize = 11.sp, fontWeight = FontWeight.SemiBold, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                                Text("Timestamp: $dateStr • Size: ${(file.length() / 1024.0).toInt()} KB", color = CyberTextMuted, fontSize = 10.sp)
+                            }
+                            
+                            Row(horizontalArrangement = Arrangement.spacedBy(4.dp)) {
+                                IconButton(
+                                    onClick = {
+                                        val authority = "${context.packageName}.fileprovider"
+                                        val backupUri = androidx.core.content.FileProvider.getUriForFile(context, authority, file)
+                                        shareExportedFile(context, backupUri)
+                                    },
+                                    modifier = Modifier.size(24.dp)
+                                ) {
+                                    Icon(Icons.Default.Share, contentDescription = "Share Backup", tint = CyberCyan, modifier = Modifier.size(14.dp))
+                                }
+
+                                IconButton(
+                                    onClick = { viewModel.deleteBackup(context, file) },
+                                    modifier = Modifier.size(24.dp)
+                                ) {
+                                    Icon(Icons.Default.Delete, contentDescription = "Delete Backup", tint = CyberOrange, modifier = Modifier.size(14.dp))
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
+
