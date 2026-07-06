@@ -33,6 +33,84 @@ sealed interface ExportState {
 
 class GrokViewModel : ViewModel() {
 
+    val todoList = MutableStateFlow<List<TodoItem>>(emptyList())
+    val changelogList = MutableStateFlow<List<ChangelogVersion>>(emptyList())
+
+    fun loadStatusTrackerData(context: Context) {
+        viewModelScope.launch {
+            val parsedChangelog = withContext(Dispatchers.IO) {
+                parseChangelog(context)
+            }
+            changelogList.value = parsedChangelog
+
+            val parsedTodos = withContext(Dispatchers.IO) {
+                parseTodos(context)
+            }
+
+            val prefs = context.getSharedPreferences("grok_status_tracker_prefs", Context.MODE_PRIVATE)
+            val customTasksJsonSet = prefs.getStringSet("custom_todo_tasks", emptySet()) ?: emptySet()
+            val customTasks = customTasksJsonSet.mapNotNull { jsonStr ->
+                val parts = jsonStr.split("|")
+                if (parts.size >= 4) {
+                    TodoItem(parts[0], parts[1], parts[2], parts[3].toBoolean(), isCustom = true)
+                } else null
+            }
+
+            val mergedTodos = (parsedTodos + customTasks).map { item ->
+                if (prefs.contains("completed_${item.id}")) {
+                    item.copy(completed = prefs.getBoolean("completed_${item.id}", item.completed))
+                } else {
+                    item
+                }
+            }
+
+            todoList.value = mergedTodos
+        }
+    }
+
+    fun toggleTodoCompleted(context: Context, todoId: String) {
+        val updated = todoList.value.map { item ->
+            if (item.id == todoId) {
+                val newCompleted = !item.completed
+                val prefs = context.getSharedPreferences("grok_status_tracker_prefs", Context.MODE_PRIVATE)
+                prefs.edit().putBoolean("completed_$todoId", newCompleted).apply()
+                item.copy(completed = newCompleted)
+            } else {
+                item
+            }
+        }
+        todoList.value = updated
+    }
+
+    fun addTodoTask(context: Context, title: String, priority: String) {
+        if (title.isBlank()) return
+        val id = "custom_todo_" + System.currentTimeMillis()
+        val newItem = TodoItem(id, title, priority, completed = false, isCustom = true)
+        
+        todoList.value = todoList.value + newItem
+
+        val prefs = context.getSharedPreferences("grok_status_tracker_prefs", Context.MODE_PRIVATE)
+        val customTasksJsonSet = prefs.getStringSet("custom_todo_tasks", emptySet())?.toMutableSet() ?: mutableSetOf()
+        
+        val serialized = "$id|$title|$priority|false"
+        customTasksJsonSet.add(serialized)
+        prefs.edit().putStringSet("custom_todo_tasks", customTasksJsonSet).apply()
+    }
+
+    fun deleteCustomTodoTask(context: Context, todoId: String) {
+        todoList.value = todoList.value.filter { it.id != todoId }
+
+        val prefs = context.getSharedPreferences("grok_status_tracker_prefs", Context.MODE_PRIVATE)
+        val customTasksJsonSet = prefs.getStringSet("custom_todo_tasks", emptySet())?.toMutableSet() ?: mutableSetOf()
+        
+        val itemToRemove = customTasksJsonSet.find { it.startsWith("$todoId|") }
+        if (itemToRemove != null) {
+            customTasksJsonSet.remove(itemToRemove)
+            prefs.edit().putStringSet("custom_todo_tasks", customTasksJsonSet).apply()
+        }
+        prefs.edit().remove("completed_$todoId").apply()
+    }
+
     private val _importState = MutableStateFlow<ImportState>(ImportState.Idle)
     val importState: StateFlow<ImportState> = _importState
 
@@ -90,9 +168,35 @@ class GrokViewModel : ViewModel() {
     // Auto Backup state
     val backupsList = MutableStateFlow<List<File>>(emptyList())
 
+    // Folder Picker States
+    val customExportFolderUri = MutableStateFlow<Uri?>(null)
+    val customExportFolderName = MutableStateFlow<String?>(null)
+
+    // Export progress states
+    val exportProgress = MutableStateFlow(0f)
+    val exportProgressMessage = MutableStateFlow("Preparing export...")
+
     // Cached parsed list
     private var parsedConversations: List<Conversation> = emptyList()
     private var selectedSourceUri: Uri? = null
+
+    fun setCustomExportFolderUri(context: Context, uri: Uri?) {
+        customExportFolderUri.value = uri
+        if (uri != null) {
+            try {
+                val takeFlags: Int = android.content.Intent.FLAG_GRANT_READ_URI_PERMISSION or android.content.Intent.FLAG_GRANT_WRITE_URI_PERMISSION
+                context.contentResolver.takePersistableUriPermission(uri, takeFlags)
+            } catch (e: Exception) {
+                e.printStackTrace()
+            }
+            val docFile = androidx.documentfile.provider.DocumentFile.fromTreeUri(context, uri)
+            customExportFolderName.value = docFile?.name ?: uri.lastPathSegment ?: "Selected Folder"
+            GrokLogger.info("Custom output directory selected: ${customExportFolderName.value}")
+        } else {
+            customExportFolderName.value = null
+            GrokLogger.info("Output directory reset to default sandboxed job folder.")
+        }
+    }
 
     fun resetState() {
         _importState.value = ImportState.Idle
@@ -108,6 +212,8 @@ class GrokViewModel : ViewModel() {
         totalBatches.value = 0
         batchProcessingStatus.value = "IDLE"
         minedBinaries.value = emptyList()
+        exportProgress.value = 0f
+        exportProgressMessage.value = "Preparing export..."
     }
 
 
@@ -299,6 +405,8 @@ class GrokViewModel : ViewModel() {
 
         viewModelScope.launch {
             _exportState.value = ExportState.Exporting
+            exportProgress.value = 0.05f
+            exportProgressMessage.value = "Initializing export structures..."
             GrokLogger.info("Compiling requested format templates (Markdown, HTML, JSON, CSV)...")
 
             try {
@@ -317,6 +425,8 @@ class GrokViewModel : ViewModel() {
                     // Extract and mine binaries
                     val fileName = getFileName(context, srcUri) ?: "GrokExport"
                     if (optBinaries.value && fileName.endsWith(".zip", ignoreCase = true)) {
+                        exportProgress.value = 0.15f
+                        exportProgressMessage.value = "Extracting and decoding embedded binary attachments..."
                         GrokLogger.info("Extracting and mining embedded binary files...")
                         context.contentResolver.openInputStream(srcUri)?.use { rawIn ->
                             ZipInputStream(BufferedInputStream(rawIn)).use { zipIn ->
@@ -381,6 +491,8 @@ class GrokViewModel : ViewModel() {
 
                     // Write per-conversation individual folders and metadata files
                     if (jobDir != null && jobDir.exists()) {
+                        exportProgress.value = 0.35f
+                        exportProgressMessage.value = "Compiling individual conversation subfolders..."
                         GrokLogger.info("Writing individual conversation subfolders...")
                         for (conv in parsedConversations) {
                             val titleClean = conv.title.replace(Regex("[^a-zA-Z0-9]"), "_").take(15)
@@ -414,6 +526,8 @@ class GrokViewModel : ViewModel() {
                         }
 
                         // Write standalone full files inside jobDir
+                        exportProgress.value = 0.65f
+                        exportProgressMessage.value = "Generating bundle templates (Markdown, HTML, JSON, CSV)..."
                         if (optMarkdown.value) {
                             val mdFull = File(jobDir, "conversations.md")
                             mdFull.writeText(GrokParser.generateMarkdown(parsedConversations))
@@ -442,6 +556,8 @@ class GrokViewModel : ViewModel() {
                     }
 
                     // Package up the processed ZIP export
+                    exportProgress.value = 0.75f
+                    exportProgressMessage.value = "Compressing compiled bundle into final ZIP archive..."
                     val outputZipFile = if (jobDir != null && jobDir.exists()) {
                         File(jobDir, "grok_processed_export.zip")
                     } else {
@@ -558,9 +674,39 @@ class GrokViewModel : ViewModel() {
                     }
 
                     // Trigger Auto Backup
+                    exportProgress.value = 0.90f
+                    exportProgressMessage.value = "Triggering local sandboxed backup snapshots..."
                     currentJob.value?.let { job ->
                         triggerAutoBackup(context, job)
                     }
+
+                    // Write copy of the ZIP to selected custom folder if selected
+                    val customFolder = customExportFolderUri.value
+                    if (customFolder != null) {
+                        exportProgress.value = 0.95f
+                        exportProgressMessage.value = "Copying ZIP to custom directory..."
+                        try {
+                            val pickedDir = androidx.documentfile.provider.DocumentFile.fromTreeUri(context, customFolder)
+                            if (pickedDir != null && pickedDir.exists()) {
+                                val existing = pickedDir.findFile("grok_processed_export.zip")
+                                existing?.delete()
+                                val newFile = pickedDir.createFile("application/zip", "grok_processed_export.zip")
+                                if (newFile != null) {
+                                    context.contentResolver.openOutputStream(newFile.uri)?.use { out ->
+                                        outputZipFile.inputStream().use { input ->
+                                            input.copyTo(out)
+                                        }
+                                    }
+                                    GrokLogger.info("Successfully copied compiled ZIP to custom directory: ${customExportFolderName.value}")
+                                }
+                            }
+                        } catch (e: Exception) {
+                            GrokLogger.error("Failed to write ZIP copy to custom folder", e)
+                        }
+                    }
+
+                    exportProgress.value = 1.0f
+                    exportProgressMessage.value = "Export compiled successfully!"
 
                     val authority = "${context.packageName}.fileprovider"
                     androidx.core.content.FileProvider.getUriForFile(context, authority, outputZipFile)

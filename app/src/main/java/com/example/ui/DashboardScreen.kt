@@ -77,6 +77,12 @@ fun DashboardScreen(viewModel: GrokViewModel) {
     val jobLabelInput by viewModel.jobLabelInput.collectAsState()
     val enableBatchMode by viewModel.enableBatchMode.collectAsState()
 
+    val customExportFolderUri by viewModel.customExportFolderUri.collectAsState()
+    val customExportFolderName by viewModel.customExportFolderName.collectAsState()
+    val exportProgress by viewModel.exportProgress.collectAsState()
+    val exportProgressMessage by viewModel.exportProgressMessage.collectAsState()
+
+    var activeTab by remember { mutableStateOf(0) }
     var showHelpDialog by remember { mutableStateOf(false) }
     var viewingJobLogs by remember { mutableStateOf<GrokJob?>(null) }
     var viewingJobReports by remember { mutableStateOf<GrokJob?>(null) }
@@ -90,6 +96,13 @@ fun DashboardScreen(viewModel: GrokViewModel) {
         contract = ActivityResultContracts.GetContent()
     ) { uri: Uri? ->
         uri?.let { viewModel.startImport(context, it) }
+    }
+
+    // Launcher for Custom Output Folder selection
+    val pickFolderLauncher = rememberLauncherForActivityResult(
+        contract = ActivityResultContracts.OpenDocumentTree()
+    ) { uri: Uri? ->
+        viewModel.setCustomExportFolderUri(context, uri)
     }
 
     // Load archived jobs on startup
@@ -291,8 +304,17 @@ fun DashboardScreen(viewModel: GrokViewModel) {
                     HeroBanner()
                 }
 
-                // Main State Router
-                when (val state = importState) {
+                // Tab Selector
+                item {
+                    StatusTabSelector(
+                        selectedTab = activeTab,
+                        onTabSelected = { activeTab = it }
+                    )
+                }
+
+                if (activeTab == 0) {
+                    // Main State Router
+                    when (val state = importState) {
                     is ImportState.Idle -> {
                         item {
                             ImportLauncherCard(
@@ -403,7 +425,8 @@ fun DashboardScreen(viewModel: GrokViewModel) {
                         // Export Actions Card
                         item {
                             ExportControlCard(
-                                exportState = exportState,
+                                viewModel = viewModel,
+                                onLaunchFolderPicker = { pickFolderLauncher.launch(null) },
                                 onTriggerExport = { viewModel.startExport(context) },
                                 onShareExport = {
                                     if (exportState is ExportState.Success) {
@@ -490,6 +513,11 @@ fun DashboardScreen(viewModel: GrokViewModel) {
                         item {
                             GrokLoggerPanel(logs = logs)
                         }
+                    }
+                }
+                } else {
+                    item {
+                        StatusTrackerDashboard(viewModel = viewModel)
                     }
                 }
             }
@@ -843,27 +871,53 @@ fun ParsingProgressCard(
                 .padding(20.dp),
             horizontalAlignment = Alignment.CenterHorizontally
         ) {
-            CircularProgressIndicator(
-                color = CyberCyan,
-                strokeWidth = 4.dp,
-                modifier = Modifier.size(48.dp)
-            )
+            Row(
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.Center,
+                modifier = Modifier.fillMaxWidth()
+            ) {
+                CircularProgressIndicator(
+                    color = CyberCyan,
+                    strokeWidth = 3.dp,
+                    modifier = Modifier.size(24.dp)
+                )
+                Spacer(modifier = Modifier.width(12.dp))
+                Text(
+                    text = "Streaming xAI JSON Blocks...",
+                    fontWeight = FontWeight.Bold,
+                    fontSize = 15.sp,
+                    color = CyberText
+                )
+            }
+            
             Spacer(modifier = Modifier.height(16.dp))
+
+            // Indeterminate sleek loading bar
+            LinearProgressIndicator(
+                color = CyberCyan,
+                trackColor = CyberBg,
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .height(6.dp)
+                    .border(1.dp, CyberBorder, RoundedCornerShape(3.dp))
+            )
+
+            Spacer(modifier = Modifier.height(12.dp))
             Text(
-                text = "Processing Locally...",
+                text = "Extracted Chat Streams: $progressCount",
+                fontSize = 13.sp,
                 fontWeight = FontWeight.Bold,
-                fontSize = 16.sp,
-                color = CyberText
+                color = CyberCyan
             )
             Spacer(modifier = Modifier.height(4.dp))
             Text(
                 text = currentFileMsg,
-                fontSize = 12.sp,
+                fontSize = 11.sp,
                 color = CyberTextMuted,
                 textAlign = TextAlign.Center
             )
 
-            Spacer(modifier = Modifier.height(24.dp))
+            Spacer(modifier = Modifier.height(20.dp))
             Divider(color = CyberBorder)
             Spacer(modifier = Modifier.height(16.dp))
 
@@ -927,10 +981,25 @@ fun MetricsSummaryCard(stats: ExtractionStats) {
 
 @Composable
 fun ExportControlCard(
-    exportState: ExportState,
+    viewModel: GrokViewModel,
+    onLaunchFolderPicker: () -> Unit,
     onTriggerExport: () -> Unit,
     onShareExport: () -> Unit
 ) {
+    val context = LocalContext.current
+    val exportState by viewModel.exportState.collectAsState()
+    val customExportFolderName by viewModel.customExportFolderName.collectAsState()
+    val exportProgress by viewModel.exportProgress.collectAsState()
+    val exportProgressMessage by viewModel.exportProgressMessage.collectAsState()
+
+    val optMarkdown by viewModel.optMarkdown.collectAsState()
+    val optHtml by viewModel.optHtml.collectAsState()
+    val optJson by viewModel.optJson.collectAsState()
+    val optCsv by viewModel.optCsv.collectAsState()
+    val optBinaries by viewModel.optBinaries.collectAsState()
+
+    var showPreviewExpanded by remember { mutableStateOf(false) }
+
     Card(
         modifier = Modifier
             .fillMaxWidth()
@@ -941,8 +1010,7 @@ fun ExportControlCard(
         Column(
             modifier = Modifier
                 .fillMaxWidth()
-                .padding(20.dp),
-            horizontalAlignment = Alignment.CenterHorizontally
+                .padding(20.dp)
         ) {
             when (exportState) {
                 is ExportState.Idle -> {
@@ -950,68 +1018,523 @@ fun ExportControlCard(
                         text = "Build Sanitized Package",
                         fontWeight = FontWeight.Bold,
                         fontSize = 16.sp,
-                        color = CyberText
+                        color = CyberText,
+                        modifier = Modifier.align(Alignment.CenterHorizontally)
                     )
-                    Spacer(modifier = Modifier.height(8.dp))
+                    Spacer(modifier = Modifier.height(4.dp))
                     Text(
                         text = "Pack all filtered transcripts, spreadsheets, static viewers, and fully decoded attachments into a consolidated ZIP.",
                         fontSize = 12.sp,
                         color = CyberTextMuted,
-                        textAlign = TextAlign.Center
+                        textAlign = TextAlign.Center,
+                        modifier = Modifier.align(Alignment.CenterHorizontally)
                     )
+                    
                     Spacer(modifier = Modifier.height(16.dp))
+                    Divider(color = CyberBorder)
+                    Spacer(modifier = Modifier.height(12.dp))
+
+                    // Folder Picker Row
+                    Text(
+                        text = "Output Destination Directory",
+                        fontWeight = FontWeight.SemiBold,
+                        color = CyberText,
+                        fontSize = 12.sp
+                    )
+                    Spacer(modifier = Modifier.height(6.dp))
+                    Row(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .background(CyberBg, RoundedCornerShape(8.dp))
+                            .border(1.dp, CyberBorder, RoundedCornerShape(8.dp))
+                            .padding(horizontal = 12.dp, vertical = 8.dp),
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.SpaceBetween
+                    ) {
+                        Row(
+                            verticalAlignment = Alignment.CenterVertically,
+                            modifier = Modifier.weight(1f)
+                        ) {
+                            Icon(
+                                imageVector = Icons.Default.Folder,
+                                contentDescription = null,
+                                tint = CyberCyan,
+                                modifier = Modifier.size(18.dp)
+                            )
+                            Spacer(modifier = Modifier.width(8.dp))
+                            Text(
+                                text = customExportFolderName ?: "Default Sandboxed Job Folder",
+                                color = if (customExportFolderName != null) CyberCyan else CyberTextMuted,
+                                fontSize = 11.sp,
+                                maxLines = 1,
+                                overflow = TextOverflow.Ellipsis
+                            )
+                        }
+
+                        Row(verticalAlignment = Alignment.CenterVertically) {
+                            if (customExportFolderName != null) {
+                                IconButton(
+                                    onClick = { viewModel.setCustomExportFolderUri(context, null) },
+                                    modifier = Modifier.size(24.dp)
+                                ) {
+                                    Icon(
+                                        imageVector = Icons.Default.Close,
+                                        contentDescription = "Reset",
+                                        tint = CyberOrange,
+                                        modifier = Modifier.size(14.dp)
+                                    )
+                                }
+                                Spacer(modifier = Modifier.width(4.dp))
+                            }
+                            Button(
+                                onClick = onLaunchFolderPicker,
+                                colors = ButtonDefaults.buttonColors(containerColor = CyberSurface, contentColor = CyberCyan),
+                                shape = RoundedCornerShape(6.dp),
+                                contentPadding = PaddingValues(horizontal = 8.dp, vertical = 2.dp),
+                                modifier = Modifier
+                                    .height(26.dp)
+                                    .border(1.dp, CyberCyan, RoundedCornerShape(6.dp))
+                            ) {
+                                Text("Choose", fontSize = 10.sp, fontWeight = FontWeight.Bold)
+                            }
+                        }
+                    }
+
+                    Spacer(modifier = Modifier.height(16.dp))
+                    Divider(color = CyberBorder)
+                    Spacer(modifier = Modifier.height(12.dp))
+
+                    // Bulk Export Preview Expandable section
+                    Row(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .clickable { showPreviewExpanded = !showPreviewExpanded }
+                            .padding(vertical = 4.dp),
+                        horizontalArrangement = Arrangement.SpaceBetween,
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Row(verticalAlignment = Alignment.CenterVertically) {
+                            Icon(
+                                imageVector = Icons.Default.Visibility,
+                                contentDescription = null,
+                                tint = CyberCyan,
+                                modifier = Modifier.size(18.dp)
+                            )
+                            Spacer(modifier = Modifier.width(8.dp))
+                            Text(
+                                text = "Bulk Export Package Preview",
+                                fontWeight = FontWeight.SemiBold,
+                                color = CyberText,
+                                fontSize = 12.sp
+                            )
+                        }
+                        Icon(
+                            imageVector = if (showPreviewExpanded) Icons.Default.ExpandLess else Icons.Default.ExpandMore,
+                            contentDescription = null,
+                            tint = CyberCyan,
+                            modifier = Modifier.size(18.dp)
+                        )
+                    }
+
+                    AnimatedVisibility(visible = showPreviewExpanded) {
+                        Column(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .padding(top = 8.dp)
+                                .background(CyberBg, RoundedCornerShape(8.dp))
+                                .border(1.dp, CyberBorder, RoundedCornerShape(8.dp))
+                                .padding(12.dp)
+                        ) {
+                            Text(
+                                text = "Preview of output files based on toggled formats:",
+                                color = CyberTextMuted,
+                                fontSize = 10.sp,
+                                fontWeight = FontWeight.Bold
+                            )
+                            Spacer(modifier = Modifier.height(8.dp))
+
+                            // Standalone files list
+                            PreviewFileRow(label = "conversations.md", active = optMarkdown, description = "Standalone summary of transcripts")
+                            PreviewFileRow(label = "conversations.html", active = optHtml, description = "Standalone index/UI search explorer")
+                            PreviewFileRow(label = "conversations.json", active = optJson, description = "Normalized clean dataset tree")
+                            PreviewFileRow(label = "conversations.csv", active = optCsv, description = "Structured spreadsheet spreadsheet")
+                            PreviewFileRow(label = "conversations_metadata_only.json", active = true, description = "Standalone lightweight index")
+                            PreviewFileRow(label = "sha256_verification.txt", active = true, description = "Reassembly checksum integrity report")
+                            PreviewFileRow(label = "grok_extraction_log.txt", active = true, description = "Comprehensive execution audit logs")
+
+                            Spacer(modifier = Modifier.height(10.dp))
+                            Divider(color = CyberBorder)
+                            Spacer(modifier = Modifier.height(10.dp))
+
+                            Text(
+                                text = "Folder Structure:",
+                                color = CyberText,
+                                fontSize = 11.sp,
+                                fontWeight = FontWeight.Bold
+                            )
+                            Spacer(modifier = Modifier.height(4.dp))
+                            Column(modifier = Modifier.padding(start = 6.dp)) {
+                                Text("📁 chats/", color = CyberCyan, fontSize = 10.sp, fontFamily = FontFamily.Monospace)
+                                Text("   📁 chat_[id]_[title_prefix]/", color = CyberText, fontSize = 10.sp, fontFamily = FontFamily.Monospace)
+                                Text("      📄 conversation.md (Obsidian markdown)", color = CyberTextMuted, fontSize = 10.sp, fontFamily = FontFamily.Monospace)
+                                Text("      📄 metadata.json (Individual metadata snapshot)", color = CyberTextMuted, fontSize = 10.sp, fontFamily = FontFamily.Monospace)
+                                if (optBinaries) {
+                                    Text("      📁 attachments/ (Extracted attachments & decoded images)", color = CyberOrange, fontSize = 10.sp, fontFamily = FontFamily.Monospace)
+                                }
+                            }
+                        }
+                    }
+
+                    Spacer(modifier = Modifier.height(20.dp))
                     Button(
                         onClick = onTriggerExport,
                         colors = ButtonDefaults.buttonColors(containerColor = CyberCyan, contentColor = CyberBg),
                         shape = RoundedCornerShape(12.dp),
-                        modifier = Modifier.fillMaxWidth().testTag("export_button")
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .height(44.dp)
+                            .testTag("export_button")
                     ) {
-                        Icon(Icons.Default.Download, contentDescription = null)
+                        Icon(Icons.Default.Download, contentDescription = null, modifier = Modifier.size(18.dp))
                         Spacer(modifier = Modifier.width(8.dp))
-                        Text("Export Now", fontWeight = FontWeight.Bold)
+                        Text("Export Now", fontWeight = FontWeight.Bold, fontSize = 14.sp)
                     }
                 }
 
                 is ExportState.Exporting -> {
-                    CircularProgressIndicator(color = CyberCyan, modifier = Modifier.size(28.dp))
-                    Spacer(modifier = Modifier.height(8.dp))
-                    Text("Creating package, decoding hex binaries...", color = CyberTextMuted, fontSize = 13.sp)
+                    Column(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalAlignment = Alignment.CenterHorizontally
+                    ) {
+                        Text(
+                            text = "COMPILING BUNDLE PACKAGE",
+                            fontWeight = FontWeight.Bold,
+                            fontSize = 13.sp,
+                            color = CyberCyan,
+                            letterSpacing = 1.sp
+                        )
+                        Spacer(modifier = Modifier.height(14.dp))
+                        
+                        // Cyberpunk styled Progress Bar
+                        val progressPercent = (exportProgress * 100).toInt()
+                        Box(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .height(10.dp)
+                                .background(CyberBg, RoundedCornerShape(5.dp))
+                                .border(1.dp, CyberBorder, RoundedCornerShape(5.dp))
+                        ) {
+                            Box(
+                                modifier = Modifier
+                                    .fillMaxHeight()
+                                    .fillMaxWidth(exportProgress)
+                                    .background(
+                                        brush = Brush.horizontalGradient(listOf(CyberCyan, CyberOrange)),
+                                        shape = RoundedCornerShape(5.dp)
+                                    )
+                            )
+                        }
+                        
+                        Spacer(modifier = Modifier.height(8.dp))
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            horizontalArrangement = Arrangement.SpaceBetween,
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            Text(
+                                text = exportProgressMessage,
+                                color = CyberTextMuted,
+                                fontSize = 11.sp,
+                                maxLines = 1,
+                                overflow = TextOverflow.Ellipsis,
+                                modifier = Modifier.weight(1f)
+                            )
+                            Text(
+                                text = "$progressPercent%",
+                                color = CyberCyan,
+                                fontSize = 11.sp,
+                                fontWeight = FontWeight.Bold
+                            )
+                        }
+                    }
                 }
 
                 is ExportState.Success -> {
-                    Icon(Icons.Default.CheckCircle, contentDescription = null, tint = CyberCyan, modifier = Modifier.size(48.dp))
-                    Spacer(modifier = Modifier.height(12.dp))
-                    Text("Export Bundle Ready!", fontWeight = FontWeight.Bold, color = CyberText)
-                    Spacer(modifier = Modifier.height(16.dp))
-                    Button(
-                        onClick = onShareExport,
-                        colors = ButtonDefaults.buttonColors(containerColor = CyberOrange, contentColor = CyberText),
-                        shape = RoundedCornerShape(12.dp),
-                        modifier = Modifier.fillMaxWidth().testTag("share_button")
+                    Column(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalAlignment = Alignment.CenterHorizontally
                     ) {
-                        Icon(Icons.Default.Share, contentDescription = null)
-                        Spacer(modifier = Modifier.width(8.dp))
-                        Text("Share / Save Decoded ZIP", fontWeight = FontWeight.Bold)
+                        Icon(
+                            imageVector = Icons.Default.CheckCircle,
+                            contentDescription = null,
+                            tint = CyberCyan,
+                            modifier = Modifier.size(48.dp)
+                        )
+                        Spacer(modifier = Modifier.height(12.dp))
+                        Text("Export Bundle Ready!", fontWeight = FontWeight.Bold, color = CyberText, fontSize = 15.sp)
+                        
+                        if (customExportFolderName != null) {
+                            Spacer(modifier = Modifier.height(6.dp))
+                            Text(
+                                text = "Also saved copy to custom directory: $customExportFolderName",
+                                color = CyberCyan,
+                                fontSize = 11.sp,
+                                textAlign = TextAlign.Center
+                            )
+                        }
+                        
+                        Spacer(modifier = Modifier.height(16.dp))
+                        Button(
+                            onClick = onShareExport,
+                            colors = ButtonDefaults.buttonColors(containerColor = CyberOrange, contentColor = CyberText),
+                            shape = RoundedCornerShape(12.dp),
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .height(44.dp)
+                                .testTag("share_button")
+                        ) {
+                            Icon(Icons.Default.Share, contentDescription = null, modifier = Modifier.size(18.dp))
+                            Spacer(modifier = Modifier.width(8.dp))
+                            Text("Share / Save Decoded ZIP", fontWeight = FontWeight.Bold)
+                        }
                     }
                 }
 
                 is ExportState.Error -> {
-                    Icon(Icons.Default.Warning, contentDescription = null, tint = CyberOrange, modifier = Modifier.size(36.dp))
-                    Spacer(modifier = Modifier.height(8.dp))
-                    Text("Export Failed", fontWeight = FontWeight.Bold, color = CyberOrange)
-                    Text(exportState.message, color = CyberTextMuted, fontSize = 12.sp, textAlign = TextAlign.Center)
-                    Spacer(modifier = Modifier.height(12.dp))
-                    Button(
-                        onClick = onTriggerExport,
-                        colors = ButtonDefaults.buttonColors(containerColor = CyberCyan, contentColor = CyberBg),
-                        shape = RoundedCornerShape(12.dp)
+                    Column(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalAlignment = Alignment.CenterHorizontally
                     ) {
-                        Text("Retry Export", fontWeight = FontWeight.Bold)
+                        Icon(
+                            imageVector = Icons.Default.Warning,
+                            contentDescription = null,
+                            tint = CyberOrange,
+                            modifier = Modifier.size(36.dp)
+                        )
+                        Spacer(modifier = Modifier.height(8.dp))
+                        Text("Export Failed", fontWeight = FontWeight.Bold, color = CyberOrange)
+                        Spacer(modifier = Modifier.height(4.dp))
+                        val errState = exportState as? ExportState.Error
+                        Text(errState?.message ?: "Export failed due to write anomaly", color = CyberTextMuted, fontSize = 12.sp, textAlign = TextAlign.Center)
+                        Spacer(modifier = Modifier.height(16.dp))
+                        Button(
+                            onClick = onTriggerExport,
+                            colors = ButtonDefaults.buttonColors(containerColor = CyberCyan, contentColor = CyberBg),
+                            shape = RoundedCornerShape(12.dp),
+                            modifier = Modifier.fillMaxWidth().height(40.dp)
+                        ) {
+                            Text("Retry Export", fontWeight = FontWeight.Bold)
+                        }
                     }
                 }
             }
         }
     }
+}
+
+@Composable
+fun PreviewFileRow(label: String, active: Boolean, description: String) {
+    Row(
+        modifier = Modifier
+            .fillMaxWidth()
+            .padding(vertical = 3.dp),
+        horizontalArrangement = Arrangement.SpaceBetween,
+        verticalAlignment = Alignment.CenterVertically
+    ) {
+        Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.weight(1f)) {
+            Icon(
+                imageVector = if (active) Icons.Default.Check else Icons.Default.Close,
+                contentDescription = null,
+                tint = if (active) CyberCyan else CyberOrange.copy(alpha = 0.5f),
+                modifier = Modifier.size(12.dp)
+            )
+            Spacer(modifier = Modifier.width(6.dp))
+            Text(
+                text = label,
+                color = if (active) CyberText else CyberTextMuted.copy(alpha = 0.5f),
+                fontFamily = FontFamily.Monospace,
+                fontSize = 10.sp,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis
+            )
+        }
+        Text(
+            text = if (active) description else "Skipped",
+            color = if (active) CyberTextMuted else CyberOrange.copy(alpha = 0.5f),
+            fontSize = 9.sp,
+            textAlign = TextAlign.End
+        )
+    }
+}
+
+@Composable
+fun ErrorLogViewerDialog(logs: List<String>, onDismiss: () -> Unit) {
+    var selectedLevel by remember { mutableStateOf("ALL") } // ALL, WARN, ERROR
+    var searchQuery by remember { mutableStateOf("") }
+    val context = LocalContext.current
+
+    val filteredLogs = remember(logs, selectedLevel, searchQuery) {
+        logs.filter { log ->
+            val matchesLevel = when (selectedLevel) {
+                "WARN" -> log.contains("[WARN]", ignoreCase = true)
+                "ERROR" -> log.contains("[ERROR]", ignoreCase = true)
+                else -> true
+            }
+            val matchesQuery = log.contains(searchQuery, ignoreCase = true)
+            matchesLevel && matchesQuery
+        }
+    }
+
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        confirmButton = {
+            TextButton(onClick = onDismiss) {
+                Text("Close", color = CyberCyan, fontWeight = FontWeight.Bold)
+            }
+        },
+        dismissButton = {
+            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                TextButton(onClick = {
+                    try {
+                        val joined = filteredLogs.joinToString("\n")
+                        val clipboard = context.getSystemService(Context.CLIPBOARD_SERVICE) as android.content.ClipboardManager
+                        val clip = android.content.ClipData.newPlainText("Grok Errors", joined)
+                        clipboard.setPrimaryClip(clip)
+                        android.widget.Toast.makeText(context, "Copied filtered logs to clipboard", android.widget.Toast.LENGTH_SHORT).show()
+                    } catch (e: Exception) {
+                        e.printStackTrace()
+                    }
+                }) {
+                    Text("Copy", color = CyberCyan)
+                }
+
+                TextButton(onClick = {
+                    try {
+                        val joined = filteredLogs.joinToString("\n")
+                        val file = File(context.cacheDir, "filtered_grok_errors.txt")
+                        file.writeText(joined)
+                        val authority = "${context.packageName}.fileprovider"
+                        val uri = androidx.core.content.FileProvider.getUriForFile(context, authority, file)
+                        val intent = Intent(Intent.ACTION_SEND).apply {
+                            type = "text/plain"
+                            putExtra(Intent.EXTRA_STREAM, uri)
+                            addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
+                        }
+                        context.startActivity(Intent.createChooser(intent, "Share Errors Log"))
+                    } catch (e: Exception) {
+                        e.printStackTrace()
+                    }
+                }) {
+                    Text("Share", color = CyberCyan)
+                }
+            }
+        },
+        title = {
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Icon(Icons.Default.BugReport, contentDescription = null, tint = CyberOrange)
+                Spacer(modifier = Modifier.width(8.dp))
+                Text("Diagnostic Error & Warning Inspector", color = CyberText, fontSize = 16.sp)
+            }
+        },
+        text = {
+            Column(modifier = Modifier.fillMaxWidth()) {
+                Text(
+                    "Slices and filters execution history for system warnings and core exceptions.",
+                    color = CyberTextMuted,
+                    fontSize = 11.sp
+                )
+                Spacer(modifier = Modifier.height(12.dp))
+
+                // Severity Filter Buttons
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.spacedBy(4.dp)
+                ) {
+                    listOf("ALL", "WARN", "ERROR").forEach { level ->
+                        val active = selectedLevel == level
+                        Box(
+                            modifier = Modifier
+                                .weight(1f)
+                                .background(if (active) CyberCyan else CyberBg, RoundedCornerShape(8.dp))
+                                .border(1.dp, if (active) CyberCyan else CyberBorder, RoundedCornerShape(8.dp))
+                                .clickable { selectedLevel = level }
+                                .padding(vertical = 6.dp),
+                            contentAlignment = Alignment.Center
+                        ) {
+                            Text(
+                                text = level,
+                                color = if (active) CyberBg else CyberTextMuted,
+                                fontSize = 11.sp,
+                                fontWeight = FontWeight.Bold
+                            )
+                        }
+                    }
+                }
+                Spacer(modifier = Modifier.height(8.dp))
+
+                // Text Search Field
+                OutlinedTextField(
+                    value = searchQuery,
+                    onValueChange = { searchQuery = it },
+                    placeholder = { Text("Filter logs text...", color = CyberTextMuted, fontSize = 11.sp) },
+                    modifier = Modifier.fillMaxWidth(),
+                    shape = RoundedCornerShape(8.dp),
+                    singleLine = true,
+                    colors = OutlinedTextFieldDefaults.colors(
+                        focusedBorderColor = CyberCyan,
+                        unfocusedBorderColor = CyberBorder,
+                        focusedContainerColor = CyberBg,
+                        unfocusedContainerColor = CyberBg,
+                        focusedTextColor = CyberText,
+                        unfocusedTextColor = CyberText
+                    )
+                )
+                Spacer(modifier = Modifier.height(12.dp))
+
+                // Log output view box
+                Box(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .height(220.dp)
+                        .background(CyberBg, RoundedCornerShape(8.dp))
+                        .border(1.dp, CyberBorder, RoundedCornerShape(8.dp))
+                        .padding(8.dp)
+                ) {
+                    if (filteredLogs.isEmpty()) {
+                        Box(
+                            modifier = Modifier.fillMaxSize(),
+                            contentAlignment = Alignment.Center
+                        ) {
+                            Text("No warning or error traces match filters.", color = CyberTextMuted, fontSize = 11.sp)
+                        }
+                    } else {
+                        LazyColumn(
+                            modifier = Modifier.fillMaxSize(),
+                            verticalArrangement = Arrangement.spacedBy(4.dp)
+                        ) {
+                            items(filteredLogs) { log ->
+                                val isError = log.contains("[ERROR]")
+                                val isWarning = log.contains("[WARN]")
+                                val textColor = when {
+                                    isError -> CyberOrange
+                                    isWarning -> Color.Yellow
+                                    else -> CyberTextMuted
+                                }
+                                Text(
+                                    text = log,
+                                    fontFamily = FontFamily.Monospace,
+                                    fontSize = 9.sp,
+                                    color = textColor
+                                )
+                            }
+                        }
+                    }
+                }
+            }
+        },
+        containerColor = CyberSurface,
+        shape = RoundedCornerShape(16.dp)
+    )
 }
 
 @Composable
@@ -1175,6 +1698,12 @@ fun shareExportedFile(context: Context, fileUri: Uri) {
 @Composable
 fun GrokLoggerPanel(logs: List<String>) {
     var isExpanded by remember { mutableStateOf(true) }
+    var showFailureInspector by remember { mutableStateOf(false) }
+
+    if (showFailureInspector) {
+        ErrorLogViewerDialog(logs = logs, onDismiss = { showFailureInspector = false })
+    }
+
     Card(
         modifier = Modifier
             .fillMaxWidth()
@@ -1190,7 +1719,10 @@ fun GrokLoggerPanel(logs: List<String>) {
                 horizontalArrangement = Arrangement.SpaceBetween,
                 verticalAlignment = Alignment.CenterVertically
             ) {
-                Row(verticalAlignment = Alignment.CenterVertically) {
+                Row(
+                    verticalAlignment = Alignment.CenterVertically,
+                    modifier = Modifier.weight(1f)
+                ) {
                     Icon(
                         imageVector = Icons.Default.Code,
                         contentDescription = null,
@@ -1205,6 +1737,22 @@ fun GrokLoggerPanel(logs: List<String>) {
                         fontSize = 13.sp
                     )
                 }
+
+                TextButton(
+                    onClick = { showFailureInspector = true },
+                    contentPadding = PaddingValues(horizontal = 8.dp, vertical = 2.dp),
+                    modifier = Modifier.height(28.dp)
+                ) {
+                    Icon(
+                        imageVector = Icons.Default.BugReport,
+                        contentDescription = null,
+                        tint = CyberOrange,
+                        modifier = Modifier.size(14.dp)
+                    )
+                    Spacer(modifier = Modifier.width(4.dp))
+                    Text("Inspector", color = CyberOrange, fontSize = 11.sp)
+                }
+
                 Icon(
                     imageVector = if (isExpanded) Icons.Default.ExpandLess else Icons.Default.ExpandMore,
                     contentDescription = null,
