@@ -321,6 +321,165 @@ class GrokViewModel : ViewModel() {
     private var parsedConversations: List<Conversation> = emptyList()
     private var selectedSourceUri: Uri? = null
 
+    // Google Drive Integration States
+    val driveAccessToken = MutableStateFlow<String?>(null)
+    val driveFilesList = MutableStateFlow<List<GoogleDriveFile>>(emptyList())
+    val isDriveLoading = MutableStateFlow(false)
+    val driveError = MutableStateFlow<String?>(null)
+    val driveDownloadProgress = MutableStateFlow<Float?>(null)
+
+    fun connectToDrive(token: String, context: Context) {
+        driveAccessToken.value = token
+        driveError.value = null
+        // Save token to preferences for convenience across sessions
+        val prefs = context.getSharedPreferences("grok_drive_prefs", Context.MODE_PRIVATE)
+        prefs.edit().putString("access_token", token).apply()
+        fetchDriveFiles()
+    }
+
+    fun disconnectDrive(context: Context) {
+        driveAccessToken.value = null
+        driveFilesList.value = emptyList()
+        driveError.value = null
+        val prefs = context.getSharedPreferences("grok_drive_prefs", Context.MODE_PRIVATE)
+        prefs.edit().remove("access_token").apply()
+    }
+
+    fun loadDriveTokenFromPrefs(context: Context) {
+        val prefs = context.getSharedPreferences("grok_drive_prefs", Context.MODE_PRIVATE)
+        val token = prefs.getString("access_token", null)
+        if (!token.isNullOrEmpty()) {
+            driveAccessToken.value = token
+            fetchDriveFiles()
+        }
+    }
+
+    fun fetchDriveFiles() {
+        val token = driveAccessToken.value ?: return
+        viewModelScope.launch {
+            isDriveLoading.value = true
+            driveError.value = null
+            withContext(Dispatchers.IO) {
+                try {
+                    val client = okhttp3.OkHttpClient.Builder()
+                        .connectTimeout(15, java.util.concurrent.TimeUnit.SECONDS)
+                        .readTimeout(15, java.util.concurrent.TimeUnit.SECONDS)
+                        .build()
+
+                    // Build query to list ZIP or JSON files or files containing "grok" in name
+                    val query = "mimeType = 'application/zip' or mimeType = 'application/json' or name contains 'grok' or name contains 'conversation'"
+                    val encodedQuery = java.net.URLEncoder.encode(query, "UTF-8")
+                    val url = "https://www.googleapis.com/drive/v3/files?q=$encodedQuery&fields=files(id,name,mimeType,size,modifiedTime)&pageSize=30"
+
+                    val request = okhttp3.Request.Builder()
+                        .url(url)
+                        .header("Authorization", "Bearer $token")
+                        .build()
+
+                    client.newCall(request).execute().use { response ->
+                        if (response.isSuccessful) {
+                            val bodyString = response.body?.string()
+                            if (!bodyString.isNullOrEmpty()) {
+                                val json = org.json.JSONObject(bodyString)
+                                val filesArray = json.optJSONArray("files")
+                                val filesList = mutableListOf<GoogleDriveFile>()
+                                if (filesArray != null) {
+                                    for (i in 0 until filesArray.length()) {
+                                        val fileObj = filesArray.getJSONObject(i)
+                                        val id = fileObj.getString("id")
+                                        val name = fileObj.getString("name")
+                                        val mimeType = fileObj.getString("mimeType")
+                                        val size = if (fileObj.has("size")) fileObj.getLong("size") else null
+                                        val modifiedTime = if (fileObj.has("modifiedTime")) fileObj.getString("modifiedTime") else null
+                                        filesList.add(GoogleDriveFile(id, name, mimeType, size, modifiedTime))
+                                    }
+                                }
+                                driveFilesList.value = filesList
+                            } else {
+                                driveError.value = "Received empty response from Google Drive."
+                            }
+                        } else {
+                            val errorMsg = "Failed to fetch files (Code ${response.code}): ${response.message}"
+                            if (response.code == 401) {
+                                driveError.value = "Session expired or invalid token. Please reconnect."
+                                driveAccessToken.value = null
+                            } else {
+                                driveError.value = errorMsg
+                            }
+                        }
+                    }
+                } catch (e: Exception) {
+                    driveError.value = "Network error: ${e.localizedMessage}"
+                } finally {
+                    isDriveLoading.value = false
+                }
+            }
+        }
+    }
+
+    fun downloadAndImportDriveFile(context: Context, fileId: String, fileName: String) {
+        val token = driveAccessToken.value ?: return
+        viewModelScope.launch {
+            isDriveLoading.value = true
+            driveDownloadProgress.value = 0f
+            driveError.value = null
+            withContext(Dispatchers.IO) {
+                try {
+                    val client = okhttp3.OkHttpClient.Builder()
+                        .connectTimeout(30, java.util.concurrent.TimeUnit.SECONDS)
+                        .readTimeout(60, java.util.concurrent.TimeUnit.SECONDS)
+                        .build()
+
+                    val url = "https://www.googleapis.com/drive/v3/files/$fileId?alt=media"
+                    val request = okhttp3.Request.Builder()
+                        .url(url)
+                        .header("Authorization", "Bearer $token")
+                        .build()
+
+                    client.newCall(request).execute().use { response ->
+                        if (response.isSuccessful) {
+                            val body = response.body ?: throw Exception("Response body was empty.")
+                            val contentLength = body.contentLength()
+                            val cacheFile = File(context.cacheDir, "grok_drive_" + System.currentTimeMillis() + "_" + fileName)
+                            
+                            val buffer = ByteArray(8192)
+                            var bytesRead: Int
+                            var totalBytesRead = 0L
+
+                            body.byteStream().use { inputStream ->
+                                cacheFile.outputStream().use { outputStream ->
+                                    while (inputStream.read(buffer).also { bytesRead = it } != -1) {
+                                        outputStream.write(buffer, 0, bytesRead)
+                                        totalBytesRead += bytesRead
+                                        if (contentLength > 0) {
+                                            driveDownloadProgress.value = totalBytesRead.toFloat() / contentLength.toFloat()
+                                        } else {
+                                            driveDownloadProgress.value = -1f
+                                        }
+                                    }
+                                }
+                            }
+                            
+                            withContext(Dispatchers.Main) {
+                                driveDownloadProgress.value = null
+                                isDriveLoading.value = false
+                                startImport(context, Uri.fromFile(cacheFile))
+                            }
+                        } else {
+                            throw Exception("Failed to download file (Code ${response.code}): ${response.message}")
+                        }
+                    }
+                } catch (e: Exception) {
+                    withContext(Dispatchers.Main) {
+                        driveError.value = "Download failed: ${e.localizedMessage}"
+                        driveDownloadProgress.value = null
+                        isDriveLoading.value = false
+                    }
+                }
+            }
+        }
+    }
+
     fun setCustomExportFolderUri(context: Context, uri: Uri?) {
         customExportFolderUri.value = uri
         if (uri != null) {
