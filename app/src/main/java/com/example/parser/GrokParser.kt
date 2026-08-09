@@ -36,12 +36,15 @@ object GrokParser {
         var role = ""
         var text = ""
         var timestamp: Long = 0
+        var thinkingTrace: String? = null
+        var metadataJson: String? = null
 
         try {
             reader.beginObject()
             while (reader.hasNext()) {
-                when (reader.nextName()) {
-                    "id", "message_id" -> id = reader.nextString()
+                val fieldName = reader.nextName()
+                when (fieldName.lowercase()) {
+                    "id", "message_id", "uuid" -> id = reader.nextString()
                     "role", "sender", "author" -> role = reader.nextString()
                     "text", "content", "body" -> {
                         val peek = reader.peek()
@@ -57,6 +60,45 @@ object GrokParser {
                             reader.endObject()
                         } else if (peek == android.util.JsonToken.STRING) {
                             text = reader.nextString()
+                        } else {
+                            reader.skipValue()
+                        }
+                    }
+                    "thinking_trace", "reasoning", "reasoning_content", "thought_process", "thoughts", "chain_of_thought", "thinking" -> {
+                        val peek = reader.peek()
+                        if (peek == android.util.JsonToken.STRING) {
+                            thinkingTrace = reader.nextString()
+                        } else if (peek == android.util.JsonToken.BEGIN_OBJECT) {
+                            reader.beginObject()
+                            var traceText = ""
+                            while (reader.hasNext()) {
+                                val name = reader.nextName()
+                                if (name in listOf("text", "content", "reasoning")) {
+                                    traceText = reader.nextString()
+                                } else {
+                                    reader.skipValue()
+                                }
+                            }
+                            reader.endObject()
+                            thinkingTrace = traceText.ifEmpty { null }
+                        } else {
+                            reader.skipValue()
+                        }
+                    }
+                    "metadata", "meta" -> {
+                        val peek = reader.peek()
+                        if (peek == android.util.JsonToken.STRING) {
+                            metadataJson = reader.nextString()
+                        } else if (peek == android.util.JsonToken.BEGIN_OBJECT) {
+                            val sb = java.lang.StringBuilder()
+                            reader.beginObject()
+                            while (reader.hasNext()) {
+                                val k = reader.nextName()
+                                val v = if (reader.peek() == android.util.JsonToken.STRING) reader.nextString() else reader.nextString()
+                                sb.append("$k: $v; ")
+                            }
+                            reader.endObject()
+                            metadataJson = sb.toString()
                         } else {
                             reader.skipValue()
                         }
@@ -85,7 +127,7 @@ object GrokParser {
         if (id.isEmpty()) id = UUID.randomUUID().toString()
         if (timestamp == 0L) timestamp = System.currentTimeMillis()
 
-        return Message(id, role, text, timestamp)
+        return Message(id, role, text, timestamp, thinkingTrace, metadataJson)
     }
 
     private fun parseSingleConversation(reader: JsonReader): Conversation? {
@@ -520,6 +562,12 @@ object GrokParser {
             val timeStr = SimpleDateFormat("HH:mm:ss", Locale.getDefault()).format(Date(msg.timestamp))
             sb.append("### $roleName *($timeStr)*\n")
 
+            if (!msg.thinkingTrace.isNullOrBlank()) {
+                sb.append("<details><summary>🧠 Thinking Trace / Reasoning</summary>\n\n")
+                sb.append("> ${msg.thinkingTrace.replace("\n", "\n> ")}\n\n")
+                sb.append("</details>\n\n")
+            }
+
             // Format message content with optional line numbering
             val textLines = msg.text.split("\n")
             for (line in textLines) {
@@ -529,6 +577,9 @@ object GrokParser {
                 } else {
                     sb.append("> $line\n")
                 }
+            }
+            if (!msg.metadataJson.isNullOrBlank()) {
+                sb.append("\n*Metadata*: `${msg.metadataJson}`\n")
             }
             sb.append("\n")
         }
@@ -647,6 +698,14 @@ object GrokParser {
                 sb.append("        \"role\": \"${msg.role}\",\n")
                 val textEscaped = msg.text.replace("\\", "\\\\").replace("\"", "\\\"").replace("\n", "\\n")
                 sb.append("        \"text\": \"$textEscaped\",\n")
+                if (!msg.thinkingTrace.isNullOrBlank()) {
+                    val traceEscaped = msg.thinkingTrace.replace("\\", "\\\\").replace("\"", "\\\"").replace("\n", "\\n")
+                    sb.append("        \"thinking_trace\": \"$traceEscaped\",\n")
+                }
+                if (!msg.metadataJson.isNullOrBlank()) {
+                    val metaEscaped = msg.metadataJson.replace("\\", "\\\\").replace("\"", "\\\"").replace("\n", "\\n")
+                    sb.append("        \"metadata\": \"$metaEscaped\",\n")
+                }
                 sb.append("        \"timestamp\": ${msg.timestamp}\n")
                 sb.append("      }")
                 if (j < conv.messages.size - 1) sb.append(",")

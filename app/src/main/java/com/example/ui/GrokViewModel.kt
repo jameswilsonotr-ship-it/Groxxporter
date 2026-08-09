@@ -1384,6 +1384,88 @@ class GrokViewModel : ViewModel() {
         return name
     }
 
+    // Drive Publishing States
+    val isPublishingToDrive = MutableStateFlow(false)
+    val drivePublishStatus = MutableStateFlow<String?>(null)
+
+    // Batch Strategy & Step-by-Step Preview States
+    val batchStrategy = MutableStateFlow("SINGLE") // "SINGLE", "MONTHLY", "COUNT_10", "COUNT_25", "COUNT_50"
+    val previewStage = MutableStateFlow(0) // 0: Input Verification, 1: Filter & Batching Preview, 2: Commit & Publish
+
+    fun publishExportToGoogleDrive(context: Context) {
+        val token = driveAccessToken.value
+        if (token.isNullOrEmpty()) {
+            drivePublishStatus.value = "Google Drive token missing. Please connect to Google Drive first."
+            return
+        }
+
+        viewModelScope.launch {
+            isPublishingToDrive.value = true
+            drivePublishStatus.value = "Uploading export package to Google Drive..."
+            withContext(Dispatchers.IO) {
+                try {
+                    val jobDir = currentJob.value?.folderPath?.let { File(it) }
+                    val zipFile = jobDir?.let { File(it, "grok_processed_export.zip") }
+                    if (zipFile == null || !zipFile.exists()) {
+                        drivePublishStatus.value = "Export package ZIP file not found. Please run export first."
+                        return@withContext
+                    }
+
+                    val client = okhttp3.OkHttpClient.Builder()
+                        .connectTimeout(30, java.util.concurrent.TimeUnit.SECONDS)
+                        .readTimeout(120, java.util.concurrent.TimeUnit.SECONDS)
+                        .build()
+
+                    val metadataJson = org.json.JSONObject().apply {
+                        put("name", "grok_export_${System.currentTimeMillis()}.zip")
+                        put("mimeType", "application/zip")
+                        put("description", "Extracted xAI Grok Conversations Export")
+                    }.toString()
+
+                    val mediaTypeZip = "application/zip".toMediaTypeOrNull()
+                    val mediaTypeJson = "application/json; charset=UTF-8".toMediaTypeOrNull()
+
+                    val requestBody = okhttp3.MultipartBody.Builder()
+                        .setType(okhttp3.MultipartBody.FORM)
+                        .addPart(
+                            okhttp3.Headers.headersOf("Content-Type", "application/json; charset=UTF-8"),
+                            okhttp3.RequestBody.create(mediaTypeJson, metadataJson)
+                        )
+                        .addPart(
+                            okhttp3.Headers.headersOf("Content-Type", "application/zip"),
+                            okhttp3.RequestBody.create(mediaTypeZip, zipFile)
+                        )
+                        .build()
+
+                    val url = "https://www.googleapis.com/upload/drive/v3/files?uploadType=multipart"
+                    val request = okhttp3.Request.Builder()
+                        .url(url)
+                        .header("Authorization", "Bearer $token")
+                        .post(requestBody)
+                        .build()
+
+                    client.newCall(request).execute().use { response ->
+                        if (response.isSuccessful) {
+                            val bodyStr = response.body?.string() ?: ""
+                            drivePublishStatus.value = "Successfully published export package to Google Drive!"
+                            GrokLogger.info("Published export to Google Drive. Response: $bodyStr")
+                            fetchDriveFiles()
+                        } else {
+                            val errStr = "Failed to upload to Drive (Code ${response.code}): ${response.message}"
+                            drivePublishStatus.value = errStr
+                            GrokLogger.error(errStr)
+                        }
+                    }
+                } catch (e: Exception) {
+                    drivePublishStatus.value = "Drive upload error: ${e.localizedMessage}"
+                    GrokLogger.error("Drive upload exception", e)
+                } finally {
+                    isPublishingToDrive.value = false
+                }
+            }
+        }
+    }
+
     private class NonClosingInputStream(private val stream: InputStream) : InputStream() {
         override fun read(): Int = stream.read()
         override fun read(b: ByteArray): Int = stream.read(b)
@@ -1398,3 +1480,11 @@ class GrokViewModel : ViewModel() {
         }
     }
 }
+
+data class GoogleDriveFile(
+    val id: String,
+    val name: String,
+    val mimeType: String,
+    val size: Long?,
+    val modifiedTime: String?
+)

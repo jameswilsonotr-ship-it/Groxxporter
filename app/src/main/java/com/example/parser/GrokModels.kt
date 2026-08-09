@@ -4,7 +4,9 @@ data class Message(
     val id: String,
     val role: String, // "user", "grok", "system", etc.
     val text: String,
-    val timestamp: Long // Unix epoch milliseconds
+    val timestamp: Long, // Unix epoch milliseconds
+    val thinkingTrace: String? = null,
+    val metadataJson: String? = null
 )
 
 data class Conversation(

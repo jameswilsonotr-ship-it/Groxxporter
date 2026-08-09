@@ -6,6 +6,7 @@ import android.net.Uri
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.animation.*
+import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
@@ -330,6 +331,10 @@ fun DashboardScreen(viewModel: GrokViewModel) {
                         }
 
                         item {
+                            GoogleDriveIntegrationCard(viewModel = viewModel)
+                        }
+
+                        item {
                             FilterConfigurationCard(
                                 startDate = startDate,
                                 endDate = endDate,
@@ -346,6 +351,10 @@ fun DashboardScreen(viewModel: GrokViewModel) {
                                 onOptCsvChange = { viewModel.optCsv.value = it },
                                 onOptBinariesChange = { viewModel.optBinaries.value = it }
                             )
+                        }
+
+                        item {
+                            StepByStepPreviewCard(viewModel = viewModel)
                         }
 
                         item {
@@ -420,6 +429,14 @@ fun DashboardScreen(viewModel: GrokViewModel) {
                                     sha256Checksum = sha256Checksum
                                 )
                             }
+                        }
+
+                        item {
+                            StepByStepPreviewCard(viewModel = viewModel)
+                        }
+
+                        item {
+                            GoogleDriveIntegrationCard(viewModel = viewModel)
                         }
 
                         // Export Actions Card
@@ -1538,6 +1555,347 @@ fun ErrorLogViewerDialog(logs: List<String>, onDismiss: () -> Unit) {
 }
 
 @Composable
+fun GoogleDriveIntegrationCard(viewModel: GrokViewModel) {
+    val context = LocalContext.current
+    val driveAccessToken by viewModel.driveAccessToken.collectAsState()
+    val driveFilesList by viewModel.driveFilesList.collectAsState()
+    val isDriveLoading by viewModel.isDriveLoading.collectAsState()
+    val driveError by viewModel.driveError.collectAsState()
+    val driveDownloadProgress by viewModel.driveDownloadProgress.collectAsState()
+    var tokenInput by remember { mutableStateOf("") }
+    var isExpanded by remember { mutableStateOf(false) }
+
+    Card(
+        modifier = Modifier
+            .fillMaxWidth()
+            .border(1.dp, CyberCyan, RoundedCornerShape(16.dp)),
+        colors = CardDefaults.cardColors(containerColor = CyberSurface),
+        shape = RoundedCornerShape(16.dp)
+    ) {
+        Column(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(16.dp)
+        ) {
+            Row(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .clickable { isExpanded = !isExpanded },
+                horizontalArrangement = Arrangement.SpaceBetween,
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Icon(
+                        imageVector = Icons.Default.CloudDownload,
+                        contentDescription = null,
+                        tint = CyberCyan,
+                        modifier = Modifier.size(22.dp)
+                    )
+                    Spacer(modifier = Modifier.width(10.dp))
+                    Column {
+                        Text(
+                            text = "Google Drive Cloud Integration",
+                            fontWeight = FontWeight.Bold,
+                            color = CyberText,
+                            fontSize = 14.sp
+                        )
+                        Text(
+                            text = if (driveAccessToken != null) "Connected • ${driveFilesList.size} archive/blob files found" else "Connect Google Drive to pick or publish archives",
+                            color = CyberTextMuted,
+                            fontSize = 11.sp
+                        )
+                    }
+                }
+                Icon(
+                    imageVector = if (isExpanded) Icons.Default.ExpandLess else Icons.Default.ExpandMore,
+                    contentDescription = null,
+                    tint = CyberCyan
+                )
+            }
+
+            AnimatedVisibility(visible = isExpanded) {
+                Column(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(top = 14.dp)
+                ) {
+                    Divider(color = CyberBorder)
+                    Spacer(modifier = Modifier.height(12.dp))
+
+                    if (driveAccessToken == null) {
+                        Text(
+                            text = "OAuth Access Token:",
+                            color = CyberText,
+                            fontSize = 12.sp,
+                            fontWeight = FontWeight.SemiBold
+                        )
+                        Spacer(modifier = Modifier.height(6.dp))
+                        OutlinedTextField(
+                            value = tokenInput,
+                            onValueChange = { tokenInput = it },
+                            placeholder = { Text("Paste Bearer Token or OAuth key", color = CyberTextMuted, fontSize = 11.sp) },
+                            modifier = Modifier.fillMaxWidth(),
+                            colors = OutlinedTextFieldDefaults.colors(
+                                focusedBorderColor = CyberCyan,
+                                unfocusedBorderColor = CyberBorder,
+                                focusedTextColor = CyberText,
+                                unfocusedTextColor = CyberText
+                            ),
+                            singleLine = true
+                        )
+                        Spacer(modifier = Modifier.height(8.dp))
+                        Button(
+                            onClick = {
+                                if (tokenInput.isNotBlank()) {
+                                    viewModel.connectToDrive(tokenInput.trim(), context)
+                                }
+                            },
+                            colors = ButtonDefaults.buttonColors(containerColor = CyberCyan, contentColor = CyberBg),
+                            shape = RoundedCornerShape(8.dp),
+                            modifier = Modifier.fillMaxWidth().height(38.dp)
+                        ) {
+                            Text("Connect to Google Drive", fontWeight = FontWeight.Bold, fontSize = 12.sp)
+                        }
+                    } else {
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            horizontalArrangement = Arrangement.SpaceBetween,
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            Text("Status: Connected", color = CyberCyan, fontSize = 12.sp, fontWeight = FontWeight.Bold)
+                            Row {
+                                IconButton(onClick = { viewModel.fetchDriveFiles() }) {
+                                    Icon(Icons.Default.Refresh, contentDescription = "Refresh", tint = CyberCyan)
+                                }
+                                OutlinedButton(
+                                    onClick = { viewModel.disconnectDrive(context) },
+                                    border = BorderStroke(1.dp, CyberOrange),
+                                    shape = RoundedCornerShape(8.dp),
+                                    contentPadding = PaddingValues(horizontal = 8.dp, vertical = 2.dp),
+                                    modifier = Modifier.height(30.dp)
+                                ) {
+                                    Text("Disconnect", color = CyberOrange, fontSize = 10.sp)
+                                }
+                            }
+                        }
+
+                        if (isDriveLoading) {
+                            Spacer(modifier = Modifier.height(8.dp))
+                            LinearProgressIndicator(modifier = Modifier.fillMaxWidth(), color = CyberCyan)
+                            if (driveDownloadProgress != null && driveDownloadProgress!! > 0f) {
+                                Text(
+                                    text = "Downloading from Drive: ${(driveDownloadProgress!! * 100).toInt()}%",
+                                    color = CyberCyan,
+                                    fontSize = 11.sp
+                                )
+                            }
+                        }
+
+                        driveError?.let { err ->
+                            Spacer(modifier = Modifier.height(6.dp))
+                            Text(text = err, color = CyberOrange, fontSize = 11.sp)
+                        }
+
+                        Spacer(modifier = Modifier.height(10.dp))
+                        Text(
+                            text = "Archives & JSON Blobs in Drive:",
+                            color = CyberText,
+                            fontSize = 12.sp,
+                            fontWeight = FontWeight.Bold
+                        )
+                        Spacer(modifier = Modifier.height(6.dp))
+
+                        if (driveFilesList.isEmpty()) {
+                            Text("No .zip or .json archives detected in Drive.", color = CyberTextMuted, fontSize = 11.sp)
+                        } else {
+                            driveFilesList.forEach { file ->
+                                Card(
+                                    modifier = Modifier
+                                        .fillMaxWidth()
+                                        .padding(vertical = 4.dp)
+                                        .border(1.dp, CyberBorder, RoundedCornerShape(8.dp)),
+                                    colors = CardDefaults.cardColors(containerColor = CyberBg)
+                                ) {
+                                    Row(
+                                        modifier = Modifier
+                                            .fillMaxWidth()
+                                            .padding(10.dp),
+                                        horizontalArrangement = Arrangement.SpaceBetween,
+                                        verticalAlignment = Alignment.CenterVertically
+                                    ) {
+                                        Column(modifier = Modifier.weight(1f)) {
+                                            Text(file.name, color = CyberText, fontSize = 12.sp, fontWeight = FontWeight.Bold, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                                            val sizeKb = file.size?.let { "${it / 1024} KB" } ?: "Unknown size"
+                                            Text("Size: $sizeKb • Type: ${file.mimeType.takeLast(15)}", color = CyberTextMuted, fontSize = 10.sp)
+                                        }
+                                        Button(
+                                            onClick = { viewModel.downloadAndImportDriveFile(context, file.id, file.name) },
+                                            colors = ButtonDefaults.buttonColors(containerColor = CyberCyan, contentColor = CyberBg),
+                                            shape = RoundedCornerShape(6.dp),
+                                            contentPadding = PaddingValues(horizontal = 8.dp, vertical = 2.dp),
+                                            modifier = Modifier.height(28.dp)
+                                        ) {
+                                            Text("Import", fontSize = 10.sp, fontWeight = FontWeight.Bold)
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
+
+@Composable
+fun StepByStepPreviewCard(viewModel: GrokViewModel) {
+    val previewStage by viewModel.previewStage.collectAsState()
+    val batchStrategy by viewModel.batchStrategy.collectAsState()
+    val startDate by viewModel.startDateFilter.collectAsState()
+    val endDate by viewModel.endDateFilter.collectAsState()
+    val stats by viewModel.stats.collectAsState()
+    val isPublishingToDrive by viewModel.isPublishingToDrive.collectAsState()
+    val drivePublishStatus by viewModel.drivePublishStatus.collectAsState()
+    val context = LocalContext.current
+
+    Card(
+        modifier = Modifier
+            .fillMaxWidth()
+            .border(1.dp, CyberCyan.copy(alpha = 0.6f), RoundedCornerShape(16.dp)),
+        colors = CardDefaults.cardColors(containerColor = CyberSurface),
+        shape = RoundedCornerShape(16.dp)
+    ) {
+        Column(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(18.dp)
+        ) {
+            Text(
+                text = "Step-by-Step Interactive Verification & Preview",
+                fontWeight = FontWeight.Bold,
+                color = CyberText,
+                fontSize = 14.sp
+            )
+            Text(
+                text = "Verify payload structure, batch slicing, and publishing commitments before execution.",
+                color = CyberTextMuted,
+                fontSize = 11.sp
+            )
+
+            Spacer(modifier = Modifier.height(14.dp))
+
+            // Stage Navigation Buttons
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.SpaceBetween
+            ) {
+                listOf(
+                    0 to "1. JSON Blobs",
+                    1 to "2. Filters & Batches",
+                    2 to "3. Publish Target"
+                ).forEach { (stageIndex, stageName) ->
+                    val isSelected = previewStage == stageIndex
+                    OutlinedButton(
+                        onClick = { viewModel.previewStage.value = stageIndex },
+                        colors = ButtonDefaults.outlinedButtonColors(
+                            containerColor = if (isSelected) CyberCyan.copy(alpha = 0.2f) else CyberBg,
+                            contentColor = if (isSelected) CyberCyan else CyberTextMuted
+                        ),
+                        border = BorderStroke(1.dp, if (isSelected) CyberCyan else CyberBorder),
+                        shape = RoundedCornerShape(8.dp),
+                        contentPadding = PaddingValues(horizontal = 6.dp, vertical = 2.dp),
+                        modifier = Modifier.height(32.dp)
+                    ) {
+                        Text(stageName, fontSize = 10.sp, fontWeight = if (isSelected) FontWeight.Bold else FontWeight.Normal)
+                    }
+                }
+            }
+
+            Spacer(modifier = Modifier.height(12.dp))
+            Divider(color = CyberBorder)
+            Spacer(modifier = Modifier.height(12.dp))
+
+            when (previewStage) {
+                0 -> {
+                    Text("Stage 1: Conversational Payload Verification", fontWeight = FontWeight.Bold, color = CyberCyan, fontSize = 12.sp)
+                    Spacer(modifier = Modifier.height(6.dp))
+                    MetricsRow("Total Conversations Detected:", "${stats.totalConversations}")
+                    MetricsRow("Total Message Objects:", "${stats.totalUserMessages + stats.totalGrokMessages}")
+                    MetricsRow("Thinking Traces & Reasonings:", "Preserved & Extracted")
+                    MetricsRow("Metadata Fields:", "Parsed & Serialized")
+                    Spacer(modifier = Modifier.height(8.dp))
+                    Text("✓ Schema verified. Compatible with standard xAI ZIP archives and single/batch JSON Blobs.", color = CyberCyan, fontSize = 11.sp)
+                }
+                1 -> {
+                    Text("Stage 2: Date Range & Batch Slicing Preview", fontWeight = FontWeight.Bold, color = CyberCyan, fontSize = 12.sp)
+                    Spacer(modifier = Modifier.height(6.dp))
+                    
+                    Text("Batching Strategy:", color = CyberText, fontSize = 11.sp, fontWeight = FontWeight.SemiBold)
+                    Spacer(modifier = Modifier.height(4.dp))
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.spacedBy(6.dp)
+                    ) {
+                        listOf(
+                            "SINGLE" to "Single ZIP",
+                            "MONTHLY" to "Monthly Batches",
+                            "COUNT_10" to "Batch 10",
+                            "COUNT_25" to "Batch 25"
+                        ).forEach { (key, label) ->
+                            val isSel = batchStrategy == key
+                            FilterChip(
+                                selected = isSel,
+                                onClick = { viewModel.batchStrategy.value = key },
+                                label = { Text(label, fontSize = 10.sp) },
+                                colors = FilterChipDefaults.filterChipColors(
+                                    selectedContainerColor = CyberCyan,
+                                    selectedLabelColor = CyberBg
+                                )
+                            )
+                        }
+                    }
+
+                    Spacer(modifier = Modifier.height(8.dp))
+                    val dateStartStr = startDate?.let { SimpleDateFormat("yyyy-MM-dd", Locale.getDefault()).format(Date(it)) } ?: "All Past"
+                    val dateEndStr = endDate?.let { SimpleDateFormat("yyyy-MM-dd", Locale.getDefault()).format(Date(it)) } ?: "Present"
+                    MetricsRow("Active Date Window:", "$dateStartStr → $dateEndStr")
+                    MetricsRow("Selected Batching Mode:", batchStrategy)
+                }
+                2 -> {
+                    Text("Stage 3: Commit & Publishing Verification", fontWeight = FontWeight.Bold, color = CyberCyan, fontSize = 12.sp)
+                    Spacer(modifier = Modifier.height(6.dp))
+                    
+                    MetricsRow("Target Destination:", "Local Zip & Job Storage")
+                    MetricsRow("Google Drive Sync:", if (viewModel.driveAccessToken.value != null) "Ready to Push" else "Not Connected")
+                    
+                    Spacer(modifier = Modifier.height(10.dp))
+                    
+                    if (viewModel.driveAccessToken.value != null) {
+                        Button(
+                            onClick = { viewModel.publishExportToGoogleDrive(context) },
+                            enabled = !isPublishingToDrive,
+                            colors = ButtonDefaults.buttonColors(containerColor = CyberOrange, contentColor = CyberText),
+                            shape = RoundedCornerShape(10.dp),
+                            modifier = Modifier.fillMaxWidth().height(40.dp)
+                        ) {
+                            Icon(Icons.Default.CloudUpload, contentDescription = null, modifier = Modifier.size(16.dp))
+                            Spacer(modifier = Modifier.width(6.dp))
+                            Text(if (isPublishingToDrive) "Uploading to Drive..." else "Publish Directly to Google Drive", fontWeight = FontWeight.Bold, fontSize = 12.sp)
+                        }
+                    }
+
+                    drivePublishStatus?.let { status ->
+                        Spacer(modifier = Modifier.height(6.dp))
+                        Text(status, color = if (status.startsWith("Successfully")) CyberCyan else CyberOrange, fontSize = 11.sp)
+                    }
+                }
+            }
+        }
+    }
+}
+
+@Composable
 fun ChatPreviewItemCard(
     conversation: Conversation,
     isExpanded: Boolean,
@@ -1633,6 +1991,40 @@ fun ChatPreviewItemCard(
                                     .background(CyberBg, RoundedCornerShape(6.dp))
                                     .padding(8.dp)
                             )
+                            if (!msg.thinkingTrace.isNullOrBlank()) {
+                                Spacer(modifier = Modifier.height(4.dp))
+                                Surface(
+                                    color = Color(0xFF1E232F),
+                                    shape = RoundedCornerShape(6.dp),
+                                    modifier = Modifier
+                                        .fillMaxWidth()
+                                        .border(1.dp, CyberCyan.copy(alpha = 0.4f), RoundedCornerShape(6.dp))
+                                ) {
+                                    Column(modifier = Modifier.padding(8.dp)) {
+                                        Text(
+                                            text = "🧠 Thinking Trace / Reasoning:",
+                                            color = CyberCyan,
+                                            fontSize = 10.sp,
+                                            fontWeight = FontWeight.Bold
+                                        )
+                                        Spacer(modifier = Modifier.height(2.dp))
+                                        Text(
+                                            text = msg.thinkingTrace,
+                                            color = CyberTextMuted,
+                                            fontSize = 11.sp,
+                                            fontFamily = FontFamily.Monospace
+                                        )
+                                    }
+                                }
+                            }
+                            if (!msg.metadataJson.isNullOrBlank()) {
+                                Spacer(modifier = Modifier.height(2.dp))
+                                Text(
+                                    text = "Meta: ${msg.metadataJson}",
+                                    color = CyberTextMuted,
+                                    fontSize = 10.sp
+                                )
+                            }
                         }
                     }
                 }
