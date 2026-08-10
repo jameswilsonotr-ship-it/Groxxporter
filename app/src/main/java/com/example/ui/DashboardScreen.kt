@@ -368,6 +368,7 @@ fun DashboardScreen(viewModel: GrokViewModel) {
 
                             item {
                                 ImportLauncherCard(
+                                    viewModel = viewModel,
                                     jobLabelInput = jobLabelInput,
                                     onJobLabelChange = { viewModel.jobLabelInput.value = it },
                                     onLaunchPicker = { pickArchiveLauncher.launch("*/*") },
@@ -636,11 +637,16 @@ fun HeroBanner() {
 
 @Composable
 fun ImportLauncherCard(
+    viewModel: GrokViewModel,
     jobLabelInput: String,
     onJobLabelChange: (String) -> Unit,
     onLaunchPicker: () -> Unit,
     onLoadDemo: () -> Unit
 ) {
+    val context = LocalContext.current
+    val importState by viewModel.importState.collectAsState()
+    val isJsonLoaded by viewModel.isLoadedFileJson.collectAsState()
+
     Card(
         modifier = Modifier
             .fillMaxWidth()
@@ -663,72 +669,102 @@ fun ImportLauncherCard(
             )
             Spacer(modifier = Modifier.height(16.dp))
             Text(
-                text = "Select xAI Export File",
+                text = if (importState is ImportState.Success && isJsonLoaded) "Archive Loaded & Ready" else "Select xAI Export File",
                 fontWeight = FontWeight.Bold,
                 fontSize = 18.sp,
                 color = CyberText
             )
             Spacer(modifier = Modifier.height(8.dp))
             Text(
-                text = "Choose the raw ZIP archive (up to 4.9 GB) or extracted conversations JSON file.",
+                text = if (importState is ImportState.Success && isJsonLoaded) 
+                    "JSON archive successfully loaded. Choose Split to generate 10MB chunks or Clear to reset." 
+                else "Choose the raw ZIP archive (up to 4.9 GB) or extracted conversations JSON file.",
                 fontSize = 13.sp,
                 color = CyberTextMuted,
                 textAlign = TextAlign.Center
             )
             Spacer(modifier = Modifier.height(16.dp))
 
-            // Job label text field inside File Importer UI
-            OutlinedTextField(
-                value = jobLabelInput,
-                onValueChange = onJobLabelChange,
-                label = { Text("Processing Job Label (Optional)", color = CyberTextMuted, fontSize = 12.sp) },
-                placeholder = { Text("e.g. Astro-Bio Analysis", color = CyberTextMuted, fontSize = 12.sp) },
-                modifier = Modifier
-                    .fillMaxWidth(0.9f)
-                    .testTag("job_label_input"),
-                colors = OutlinedTextFieldDefaults.colors(
-                    focusedBorderColor = CyberCyan,
-                    unfocusedBorderColor = CyberBorder,
-                    focusedLabelColor = CyberCyan,
-                    focusedTextColor = CyberText,
-                    unfocusedTextColor = CyberText,
-                    unfocusedContainerColor = CyberBg,
-                    focusedContainerColor = CyberBg
-                ),
-                singleLine = true,
-                shape = RoundedCornerShape(10.dp)
-            )
+            if (importState is ImportState.Success && isJsonLoaded) {
+                Row(
+                    modifier = Modifier.fillMaxWidth(0.9f),
+                    horizontalArrangement = Arrangement.spacedBy(12.dp)
+                ) {
+                    Button(
+                        onClick = { viewModel.splitJsonArchive(context) },
+                        colors = ButtonDefaults.buttonColors(containerColor = CyberCyan, contentColor = CyberBg),
+                        shape = RoundedCornerShape(12.dp),
+                        modifier = Modifier.weight(1f).testTag("split_archive_button")
+                    ) {
+                        Icon(Icons.Default.CallSplit, contentDescription = null, modifier = Modifier.size(16.dp))
+                        Spacer(modifier = Modifier.width(4.dp))
+                        Text("Split", fontWeight = FontWeight.Bold)
+                    }
+                    Button(
+                        onClick = { viewModel.resetState() },
+                        colors = ButtonDefaults.buttonColors(containerColor = CyberSurface, contentColor = CyberOrange),
+                        shape = RoundedCornerShape(12.dp),
+                        border = BorderStroke(1.dp, CyberOrange),
+                        modifier = Modifier.weight(1f).testTag("clear_archive_button")
+                    ) {
+                        Icon(Icons.Default.Clear, contentDescription = null, modifier = Modifier.size(16.dp))
+                        Spacer(modifier = Modifier.width(4.dp))
+                        Text("Clear", fontWeight = FontWeight.Bold)
+                    }
+                }
+            } else {
+                OutlinedTextField(
+                    value = jobLabelInput,
+                    onValueChange = onJobLabelChange,
+                    label = { Text("Processing Job Label (Optional)", color = CyberTextMuted, fontSize = 12.sp) },
+                    placeholder = { Text("e.g. Astro-Bio Analysis", color = CyberTextMuted, fontSize = 12.sp) },
+                    modifier = Modifier
+                        .fillMaxWidth(0.9f)
+                        .testTag("job_label_input"),
+                    colors = OutlinedTextFieldDefaults.colors(
+                        focusedBorderColor = CyberCyan,
+                        unfocusedBorderColor = CyberBorder,
+                        focusedLabelColor = CyberCyan,
+                        focusedTextColor = CyberText,
+                        unfocusedTextColor = CyberText,
+                        unfocusedContainerColor = CyberBg,
+                        focusedContainerColor = CyberBg
+                    ),
+                    singleLine = true,
+                    shape = RoundedCornerShape(10.dp)
+                )
 
-            Spacer(modifier = Modifier.height(16.dp))
-            Button(
-                onClick = onLaunchPicker,
-                colors = ButtonDefaults.buttonColors(containerColor = CyberCyan, contentColor = CyberBg),
-                shape = RoundedCornerShape(12.dp),
-                modifier = Modifier.fillMaxWidth(0.8f).testTag("select_file_button")
-            ) {
-                Text("Browse Files", fontWeight = FontWeight.Bold)
-            }
+                Spacer(modifier = Modifier.height(16.dp))
+                Button(
+                    onClick = onLaunchPicker,
+                    colors = ButtonDefaults.buttonColors(containerColor = CyberCyan, contentColor = CyberBg),
+                    shape = RoundedCornerShape(12.dp),
+                    modifier = Modifier.fillMaxWidth(0.8f).testTag("select_file_button")
+                ) {
+                    Text("Browse Files", fontWeight = FontWeight.Bold)
+                }
 
-            Spacer(modifier = Modifier.height(12.dp))
-            Text(
-                text = "— OR —",
-                fontSize = 11.sp,
-                fontWeight = FontWeight.Bold,
-                color = CyberTextMuted
-            )
-            Spacer(modifier = Modifier.height(12.dp))
-            Button(
-                onClick = onLoadDemo,
-                colors = ButtonDefaults.buttonColors(containerColor = CyberSurface, contentColor = CyberCyan),
-                shape = RoundedCornerShape(12.dp),
-                modifier = Modifier
-                    .fillMaxWidth(0.8f)
-                    .border(1.dp, CyberCyan, RoundedCornerShape(12.dp))
-                    .testTag("load_sample_button")
-            ) {
-                Icon(Icons.Default.PlayArrow, contentDescription = null, modifier = Modifier.size(16.dp))
-                Spacer(modifier = Modifier.width(8.dp))
-                Text("Load Sample Dataset", fontWeight = FontWeight.Bold)
+                Spacer(modifier = Modifier.height(12.dp))
+                Text(
+                    text = "— OR —",
+                    fontSize = 11.sp,
+                    fontWeight = FontWeight.Bold,
+                    color = CyberTextMuted
+                )
+                Spacer(modifier = Modifier.height(12.dp))
+                Button(
+                    onClick = onLoadDemo,
+                    colors = ButtonDefaults.buttonColors(containerColor = CyberSurface, contentColor = CyberCyan),
+                    shape = RoundedCornerShape(12.dp),
+                    modifier = Modifier
+                        .fillMaxWidth(0.8f)
+                        .border(1.dp, CyberCyan, RoundedCornerShape(12.dp))
+                        .testTag("load_sample_button")
+                ) {
+                    Icon(Icons.Default.PlayArrow, contentDescription = null, modifier = Modifier.size(16.dp))
+                    Spacer(modifier = Modifier.width(8.dp))
+                    Text("Load Sample Dataset", fontWeight = FontWeight.Bold)
+                }
             }
         }
     }

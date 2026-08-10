@@ -275,6 +275,9 @@ class GrokViewModel : ViewModel() {
     private val _importState = MutableStateFlow<ImportState>(ImportState.Idle)
     val importState: StateFlow<ImportState> = _importState
 
+    val isLoadedFileJson = MutableStateFlow(false)
+    val lastLoadedUri = MutableStateFlow<Uri?>(null)
+
     private val _exportState = MutableStateFlow<ExportState>(ExportState.Idle)
     val exportState: StateFlow<ExportState> = _exportState
 
@@ -643,6 +646,8 @@ class GrokViewModel : ViewModel() {
     fun resetState() {
         _importState.value = ImportState.Idle
         _exportState.value = ExportState.Idle
+        isLoadedFileJson.value = false
+        lastLoadedUri.value = null
         _stats.value = ExtractionStats()
         _importProgress.value = 0
         validationMatched.value = null
@@ -656,6 +661,47 @@ class GrokViewModel : ViewModel() {
         minedBinaries.value = emptyList()
         exportProgress.value = 0f
         exportProgressMessage.value = "Preparing export..."
+    }
+
+    fun splitJsonArchive(context: Context) {
+        val uri = lastLoadedUri.value ?: return
+        if (!isLoadedFileJson.value) {
+            GrokLogger.error("Split failed: Loaded file is not a raw JSON file.")
+            return
+        }
+        viewModelScope.launch(Dispatchers.IO) {
+            try {
+                GrokLogger.info("Starting JSON split into first 10MB and last 10MB chunks...")
+                val bytes = context.contentResolver.openInputStream(uri)?.use { it.readBytes() } ?: throw Exception("Failed to read JSON stream")
+                
+                val totalSize = bytes.size
+                val chunkLimit = 10 * 1024 * 1024 // 10 MB
+                
+                val firstBytes = if (totalSize <= chunkLimit) bytes else bytes.copyOfRange(0, chunkLimit)
+                val lastBytes = if (totalSize <= chunkLimit) bytes else bytes.copyOfRange(totalSize - chunkLimit, totalSize)
+                
+                val exportDir = currentJob.value?.folderPath?.let { File(it) } ?: File(context.filesDir, "grok_exports").apply { mkdirs() }
+                
+                val firstJsonFile = File(exportDir, "chunk_first_10mb.json")
+                val lastJsonFile = File(exportDir, "chunk_last_10mb.json")
+                val firstBookMd = File(exportDir, "chunk_first_10mb_book.md")
+                val lastBookMd = File(exportDir, "chunk_last_10mb_book.md")
+                
+                firstJsonFile.writeBytes(firstBytes)
+                lastJsonFile.writeBytes(lastBytes)
+                
+                firstBookMd.writeText("# Grok Archive - First 10MB Book Transcript\n\n```json\n" + String(firstBytes, Charsets.UTF_8).take(50000) + "\n...\n```")
+                lastBookMd.writeText("# Grok Archive - Last 10MB Book Transcript\n\n```json\n" + String(lastBytes, Charsets.UTF_8).take(50000) + "\n...\n```")
+                
+                val authority = "${context.packageName}.fileprovider"
+                val fileUri = androidx.core.content.FileProvider.getUriForFile(context, authority, firstJsonFile)
+                GrokLogger.info("JSON successfully split into first and last 10MB JSON and book chunks at: ${exportDir.absolutePath}")
+                _exportState.value = ExportState.Success(fileUri, firstJsonFile.absolutePath, ExportStats(fileCount = 4, totalSizeBytes = totalSize.toLong()))
+            } catch (e: Exception) {
+                GrokLogger.error("Error splitting JSON archive", e)
+                _exportState.value = ExportState.Error("Split error: ${e.localizedMessage}")
+            }
+        }
     }
 
 
@@ -713,6 +759,9 @@ class GrokViewModel : ViewModel() {
                 val resolvedConversations = withContext(Dispatchers.IO) {
                     val contentResolver = context.contentResolver
                     val fileName = getFileName(context, uri) ?: "GrokExport"
+                    val isJson = !fileName.endsWith(".zip", ignoreCase = true)
+                    isLoadedFileJson.value = isJson
+                    lastLoadedUri.value = uri
 
                     if (fileName.endsWith(".zip", ignoreCase = true)) {
                         GrokLogger.info("File recognized as ZIP archive. Slicing archive contents...")
