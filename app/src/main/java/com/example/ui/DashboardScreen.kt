@@ -106,6 +106,10 @@ fun DashboardScreen(viewModel: GrokViewModel) {
         contract = ActivityResultContracts.OpenDocumentTree()
     ) { uri: Uri? ->
         viewModel.setCustomExportFolderUri(context, uri)
+        if (uri != null && exportState is ExportState.Success) {
+            val successState = exportState as ExportState.Success
+            shareExportedFile(context, successState.fileUri)
+        }
     }
 
     // Load archived jobs on startup
@@ -448,7 +452,9 @@ fun DashboardScreen(viewModel: GrokViewModel) {
                                 onLaunchFolderPicker = { pickFolderLauncher.launch(null) },
                                 onTriggerExport = { viewModel.startExport(context) },
                                 onShareExport = {
-                                    if (exportState is ExportState.Success) {
+                                    if (viewModel.customExportFolderUri.value == null) {
+                                        pickFolderLauncher.launch(null)
+                                    } else if (exportState is ExportState.Success) {
                                         val successState = exportState as ExportState.Success
                                         shareExportedFile(context, successState.fileUri)
                                     }
@@ -491,10 +497,15 @@ fun DashboardScreen(viewModel: GrokViewModel) {
                             )
                         }
 
-                        val filteredChats = state.conversations.filter {
-                            it.title.contains(searchQuery, ignoreCase = true) ||
-                            it.id.contains(searchQuery, ignoreCase = true) ||
-                            it.messages.any { m -> m.text.contains(searchQuery, ignoreCase = true) }
+                        val filteredChats = state.conversations.filter { chat ->
+                            searchQuery.isBlank() ||
+                            chat.title.contains(searchQuery, ignoreCase = true) ||
+                            chat.id.contains(searchQuery, ignoreCase = true) ||
+                            chat.messages.any { m ->
+                                m.text.contains(searchQuery, ignoreCase = true) ||
+                                (m.thinkingTrace?.contains(searchQuery, ignoreCase = true) == true) ||
+                                (m.metadataJson?.contains(searchQuery, ignoreCase = true) == true)
+                            }
                         }
 
                         if (filteredChats.isEmpty()) {
@@ -1910,9 +1921,14 @@ fun StepByStepPreviewCard(viewModel: GrokViewModel) {
     val startDate by viewModel.startDateFilter.collectAsState()
     val endDate by viewModel.endDateFilter.collectAsState()
     val stats by viewModel.stats.collectAsState()
+    val importState by viewModel.importState.collectAsState()
     val isPublishingToDrive by viewModel.isPublishingToDrive.collectAsState()
     val drivePublishStatus by viewModel.drivePublishStatus.collectAsState()
     val context = LocalContext.current
+
+    val parsedConversations = (importState as? ImportState.Success)?.conversations ?: emptyList()
+    val totalDetectedConversations = if (parsedConversations.isNotEmpty()) parsedConversations.size else stats.totalConversations
+    val totalExtractedMessages = if (parsedConversations.isNotEmpty()) parsedConversations.sumOf { it.messages.size } else (stats.totalUserMessages + stats.totalGrokMessages)
 
     Card(
         modifier = Modifier
@@ -1975,8 +1991,8 @@ fun StepByStepPreviewCard(viewModel: GrokViewModel) {
                 0 -> {
                     Text("Stage 1: Conversational Payload Verification", fontWeight = FontWeight.Bold, color = CyberCyan, fontSize = 12.sp)
                     Spacer(modifier = Modifier.height(6.dp))
-                    MetricsRow("Total Conversations Detected:", "${stats.totalConversations}")
-                    MetricsRow("Total Message Objects:", "${stats.totalUserMessages + stats.totalGrokMessages}")
+                    MetricsRow("Total Conversations Detected:", "$totalDetectedConversations")
+                    MetricsRow("Total Message Objects:", "$totalExtractedMessages")
                     MetricsRow("Thinking Traces & Reasonings:", "Preserved & Extracted")
                     MetricsRow("Metadata Fields:", "Parsed & Serialized")
                     Spacer(modifier = Modifier.height(8.dp))

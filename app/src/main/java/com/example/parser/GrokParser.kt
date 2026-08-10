@@ -352,7 +352,32 @@ object GrokParser {
 
         messages.sortBy { it.timestamp }
 
-        return Conversation(id, title, timestamp, messages)
+        val formattedTitle = formatConversationTitle(title, messages)
+
+        return Conversation(id, formattedTitle, timestamp, messages)
+    }
+
+    /**
+     * Formats conversation title according to xAI Grok auto-generation rules.
+     * If title is missing or "Untitled", sets title to first 50 characters of first USER message turn.
+     * Appends message count to the display label (e.g. "How do we configure... (77 msgs)").
+     */
+    fun formatConversationTitle(rawTitle: String?, messages: List<Message>): String {
+        var cleanTitle = rawTitle?.trim() ?: ""
+        if (cleanTitle.isEmpty() || cleanTitle.equals("Untitled", ignoreCase = true) || cleanTitle.equals("null", ignoreCase = true)) {
+            val firstUserMsg = messages.firstOrNull { it.role.lowercase() in listOf("user", "human") }?.text?.trim()
+            cleanTitle = if (!firstUserMsg.isNullOrBlank()) {
+                val singleLine = firstUserMsg.replace("\r", " ").replace("\n", " ").trim()
+                if (singleLine.length > 50) {
+                    singleLine.take(50) + "..."
+                } else {
+                    singleLine
+                }
+            } else {
+                "Exported Conversation"
+            }
+        }
+        return "$cleanTitle (${messages.size} msgs)"
     }
 
     /**
@@ -610,7 +635,8 @@ object GrokParser {
                     if (rootId.isEmpty()) rootId = UUID.randomUUID().toString()
                     if (rootTimestamp == 0L) rootTimestamp = System.currentTimeMillis()
                     rootMessages.sortBy { it.timestamp }
-                    val singleConv = Conversation(rootId, rootTitle.ifEmpty { "Exported Conversation" }, rootTimestamp, rootMessages)
+                    val formattedTitle = formatConversationTitle(rootTitle, rootMessages)
+                    val singleConv = Conversation(rootId, formattedTitle, rootTimestamp, rootMessages)
                     stats.totalConversations++
                     val matchesDate = (startDate == null || singleConv.timestamp >= startDate) &&
                                       (endDate == null || singleConv.timestamp <= endDate)
