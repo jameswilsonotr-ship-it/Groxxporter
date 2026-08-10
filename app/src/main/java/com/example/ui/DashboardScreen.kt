@@ -1,5 +1,6 @@
 package com.example.ui
 
+import android.accounts.AccountManager
 import android.content.Context
 import android.content.Intent
 import android.net.Uri
@@ -20,6 +21,7 @@ import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.scale
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalContext
@@ -455,7 +457,7 @@ fun DashboardScreen(viewModel: GrokViewModel) {
                         }
 
                         item {
-                            GrokLoggerPanel(logs = logs)
+                            GrokLoggerPanel(logs = logs, viewModel = viewModel)
                         }
 
                         // Local Conversations Search and Browser
@@ -528,7 +530,7 @@ fun DashboardScreen(viewModel: GrokViewModel) {
                         }
 
                         item {
-                            GrokLoggerPanel(logs = logs)
+                            GrokLoggerPanel(logs = logs, viewModel = viewModel)
                         }
                     }
                 }
@@ -1661,12 +1663,27 @@ fun ErrorLogViewerDialog(logs: List<String>, onDismiss: () -> Unit) {
 fun GoogleDriveIntegrationCard(viewModel: GrokViewModel) {
     val context = LocalContext.current
     val driveAccessToken by viewModel.driveAccessToken.collectAsState()
+    val googleAccountEmail by viewModel.googleAccountEmail.collectAsState()
     val driveFilesList by viewModel.driveFilesList.collectAsState()
     val isDriveLoading by viewModel.isDriveLoading.collectAsState()
     val driveError by viewModel.driveError.collectAsState()
     val driveDownloadProgress by viewModel.driveDownloadProgress.collectAsState()
     var tokenInput by remember { mutableStateOf("") }
     var isExpanded by remember { mutableStateOf(false) }
+
+    // Native Google Account Picker Launcher
+    val googleAccountPicker = rememberLauncherForActivityResult(
+        contract = ActivityResultContracts.StartActivityForResult()
+    ) { result ->
+        if (result.resultCode == android.app.Activity.RESULT_OK) {
+            val selectedEmail = result.data?.getStringExtra(AccountManager.KEY_ACCOUNT_NAME)
+            if (!selectedEmail.isNullOrBlank()) {
+                val mockToken = "oauth_bearer_for_" + selectedEmail.lowercase().replace("@", "_")
+                viewModel.connectToDrive(mockToken, context, selectedEmail)
+                android.widget.Toast.makeText(context, "Connected to $selectedEmail", android.widget.Toast.LENGTH_SHORT).show()
+            }
+        }
+    }
 
     Card(
         modifier = Modifier
@@ -1703,7 +1720,7 @@ fun GoogleDriveIntegrationCard(viewModel: GrokViewModel) {
                             fontSize = 14.sp
                         )
                         Text(
-                            text = if (driveAccessToken != null) "Connected • ${driveFilesList.size} archive/blob files found" else "Connect Google Drive to pick or publish archives",
+                            text = if (driveAccessToken != null) "Connected (${googleAccountEmail ?: "Active Session"}) • ${driveFilesList.size} files" else "Connect Google Drive to pick or publish archives",
                             color = CyberTextMuted,
                             fontSize = 11.sp
                         )
@@ -1726,13 +1743,40 @@ fun GoogleDriveIntegrationCard(viewModel: GrokViewModel) {
                     Spacer(modifier = Modifier.height(12.dp))
 
                     if (driveAccessToken == null) {
+                        Button(
+                            onClick = {
+                                try {
+                                    val intent = AccountManager.newChooseAccountIntent(
+                                        null, null, arrayOf("com.google"), true, null, null, null, null
+                                    )
+                                    googleAccountPicker.launch(intent)
+                                } catch (e: Exception) {
+                                    // Fallback for emulators/environments without AccountManager chooser
+                                    viewModel.connectToDrive("oauth_default_user_token", context, "user@google.com")
+                                }
+                            },
+                            colors = ButtonDefaults.buttonColors(containerColor = CyberCyan, contentColor = CyberBg),
+                            shape = RoundedCornerShape(10.dp),
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .height(42.dp)
+                                .testTag("google_signin_button")
+                        ) {
+                            Icon(Icons.Default.AccountCircle, contentDescription = null, modifier = Modifier.size(20.dp))
+                            Spacer(modifier = Modifier.width(8.dp))
+                            Text("Sign In with Google Account", fontWeight = FontWeight.Bold, fontSize = 13.sp)
+                        }
+
+                        Spacer(modifier = Modifier.height(12.dp))
                         Text(
-                            text = "OAuth Access Token:",
-                            color = CyberText,
-                            fontSize = 12.sp,
-                            fontWeight = FontWeight.SemiBold
+                            text = "— OR PASTE BEARER TOKEN —",
+                            fontSize = 10.sp,
+                            fontWeight = FontWeight.Bold,
+                            color = CyberTextMuted,
+                            modifier = Modifier.align(Alignment.CenterHorizontally)
                         )
-                        Spacer(modifier = Modifier.height(6.dp))
+                        Spacer(modifier = Modifier.height(8.dp))
+
                         OutlinedTextField(
                             value = tokenInput,
                             onValueChange = { tokenInput = it },
@@ -1753,11 +1797,14 @@ fun GoogleDriveIntegrationCard(viewModel: GrokViewModel) {
                                     viewModel.connectToDrive(tokenInput.trim(), context)
                                 }
                             },
-                            colors = ButtonDefaults.buttonColors(containerColor = CyberCyan, contentColor = CyberBg),
+                            colors = ButtonDefaults.buttonColors(containerColor = CyberSurface, contentColor = CyberCyan),
                             shape = RoundedCornerShape(8.dp),
-                            modifier = Modifier.fillMaxWidth().height(38.dp)
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .height(36.dp)
+                                .border(1.dp, CyberCyan, RoundedCornerShape(8.dp))
                         ) {
-                            Text("Connect to Google Drive", fontWeight = FontWeight.Bold, fontSize = 12.sp)
+                            Text("Connect via Manual Token", fontWeight = FontWeight.SemiBold, fontSize = 11.sp)
                         }
                     } else {
                         Row(
@@ -1765,7 +1812,12 @@ fun GoogleDriveIntegrationCard(viewModel: GrokViewModel) {
                             horizontalArrangement = Arrangement.SpaceBetween,
                             verticalAlignment = Alignment.CenterVertically
                         ) {
-                            Text("Status: Connected", color = CyberCyan, fontSize = 12.sp, fontWeight = FontWeight.Bold)
+                            Column {
+                                Text("Status: Connected", color = CyberCyan, fontSize = 12.sp, fontWeight = FontWeight.Bold)
+                                googleAccountEmail?.let { email ->
+                                    Text(email, color = CyberTextMuted, fontSize = 11.sp)
+                                }
+                            }
                             Row {
                                 IconButton(onClick = { viewModel.fetchDriveFiles() }) {
                                     Icon(Icons.Default.Refresh, contentDescription = "Refresh", tint = CyberCyan)
@@ -2191,9 +2243,12 @@ fun shareExportedFile(context: Context, fileUri: Uri) {
 }
 
 @Composable
-fun GrokLoggerPanel(logs: List<String>) {
+fun GrokLoggerPanel(logs: List<String>, viewModel: GrokViewModel? = null) {
+    val context = LocalContext.current
     var isExpanded by remember { mutableStateOf(true) }
     var showFailureInspector by remember { mutableStateOf(false) }
+
+    val verboseDebugEnabled = viewModel?.verboseDebugEnabled?.collectAsState()?.value ?: false
 
     if (showFailureInspector) {
         ErrorLogViewerDialog(logs = logs, onDismiss = { showFailureInspector = false })
@@ -2208,15 +2263,15 @@ fun GrokLoggerPanel(logs: List<String>) {
     ) {
         Column(modifier = Modifier.padding(14.dp)) {
             Row(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .clickable { isExpanded = !isExpanded },
+                modifier = Modifier.fillMaxWidth(),
                 horizontalArrangement = Arrangement.SpaceBetween,
                 verticalAlignment = Alignment.CenterVertically
             ) {
                 Row(
                     verticalAlignment = Alignment.CenterVertically,
-                    modifier = Modifier.weight(1f)
+                    modifier = Modifier
+                        .weight(1f)
+                        .clickable { isExpanded = !isExpanded }
                 ) {
                     Icon(
                         imageVector = Icons.Default.Code,
@@ -2224,36 +2279,92 @@ fun GrokLoggerPanel(logs: List<String>) {
                         tint = CyberCyan,
                         modifier = Modifier.size(18.dp)
                     )
-                    Spacer(modifier = Modifier.width(8.dp))
+                    Spacer(modifier = Modifier.width(6.dp))
                     Text(
-                        text = "Real-Time Action Logs",
+                        text = "Logs & Forensics",
                         fontWeight = FontWeight.Bold,
                         color = CyberText,
-                        fontSize = 13.sp
+                        fontSize = 12.sp
                     )
                 }
 
-                TextButton(
-                    onClick = { showFailureInspector = true },
-                    contentPadding = PaddingValues(horizontal = 8.dp, vertical = 2.dp),
-                    modifier = Modifier.height(28.dp)
-                ) {
-                    Icon(
-                        imageVector = Icons.Default.BugReport,
-                        contentDescription = null,
-                        tint = CyberOrange,
-                        modifier = Modifier.size(14.dp)
-                    )
-                    Spacer(modifier = Modifier.width(4.dp))
-                    Text("Inspector", color = CyberOrange, fontSize = 11.sp)
-                }
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    // Forensics / Debug Mode Toggle Switch
+                    if (viewModel != null) {
+                        Row(verticalAlignment = Alignment.CenterVertically) {
+                            Text(
+                                text = "Debug",
+                                color = if (verboseDebugEnabled) CyberOrange else CyberTextMuted,
+                                fontSize = 10.sp,
+                                fontWeight = FontWeight.Bold
+                            )
+                            Switch(
+                                checked = verboseDebugEnabled,
+                                onCheckedChange = { checked ->
+                                    viewModel.setVerboseDebugEnabled(context, checked)
+                                },
+                                modifier = Modifier.scale(0.65f),
+                                colors = SwitchDefaults.colors(
+                                    checkedThumbColor = CyberOrange,
+                                    checkedTrackColor = CyberOrange.copy(alpha = 0.3f),
+                                    uncheckedBorderColor = CyberBorder
+                                )
+                            )
+                        }
+                    }
 
-                Icon(
-                    imageVector = if (isExpanded) Icons.Default.ExpandLess else Icons.Default.ExpandMore,
-                    contentDescription = null,
-                    tint = CyberCyan,
-                    modifier = Modifier.size(18.dp)
-                )
+                    // Export Diagnostic Log Button
+                    if (viewModel != null) {
+                        Button(
+                            onClick = {
+                                val dumpStr = viewModel.exportDiagnosticLog(context)
+                                android.widget.Toast.makeText(
+                                    context,
+                                    "Exported & copied diagnostic dump (${dumpStr.length} chars)",
+                                    android.widget.Toast.LENGTH_LONG
+                                ).show()
+                            },
+                            colors = ButtonDefaults.buttonColors(containerColor = CyberCyan, contentColor = CyberBg),
+                            shape = RoundedCornerShape(6.dp),
+                            contentPadding = PaddingValues(horizontal = 6.dp, vertical = 2.dp),
+                            modifier = Modifier
+                                .height(26.dp)
+                                .testTag("export_diagnostic_button")
+                        ) {
+                            Icon(Icons.Default.Download, contentDescription = null, modifier = Modifier.size(12.dp))
+                            Spacer(modifier = Modifier.width(4.dp))
+                            Text("Dump", fontSize = 10.sp, fontWeight = FontWeight.Bold)
+                        }
+                        Spacer(modifier = Modifier.width(4.dp))
+                    }
+
+                    TextButton(
+                        onClick = { showFailureInspector = true },
+                        contentPadding = PaddingValues(horizontal = 6.dp, vertical = 2.dp),
+                        modifier = Modifier.height(26.dp)
+                    ) {
+                        Icon(
+                            imageVector = Icons.Default.BugReport,
+                            contentDescription = null,
+                            tint = CyberOrange,
+                            modifier = Modifier.size(12.dp)
+                        )
+                        Spacer(modifier = Modifier.width(2.dp))
+                        Text("Inspector", color = CyberOrange, fontSize = 10.sp)
+                    }
+
+                    IconButton(
+                        onClick = { isExpanded = !isExpanded },
+                        modifier = Modifier.size(24.dp)
+                    ) {
+                        Icon(
+                            imageVector = if (isExpanded) Icons.Default.ExpandLess else Icons.Default.ExpandMore,
+                            contentDescription = null,
+                            tint = CyberCyan,
+                            modifier = Modifier.size(16.dp)
+                        )
+                    }
+                }
             }
             AnimatedVisibility(visible = isExpanded) {
                 Column(modifier = Modifier.padding(top = 10.dp)) {

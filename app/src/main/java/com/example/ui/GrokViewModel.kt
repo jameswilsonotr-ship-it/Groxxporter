@@ -314,7 +314,7 @@ class GrokViewModel : ViewModel() {
     // Auto Backup state
     val backupsList = MutableStateFlow<List<File>>(emptyList())
 
-    // Folder Picker States
+    // Folder Picker States & Storage Management
     val customExportFolderUri = MutableStateFlow<Uri?>(null)
     val customExportFolderName = MutableStateFlow<String?>(null)
 
@@ -326,37 +326,128 @@ class GrokViewModel : ViewModel() {
     private var parsedConversations: List<Conversation> = emptyList()
     private var selectedSourceUri: Uri? = null
 
+    // Debug Mode & Forensics States
+    val verboseDebugEnabled = MutableStateFlow(false)
+
     // Google Drive Integration States
+    val googleAccountEmail = MutableStateFlow<String?>(null)
     val driveAccessToken = MutableStateFlow<String?>(null)
     val driveFilesList = MutableStateFlow<List<GoogleDriveFile>>(emptyList())
     val isDriveLoading = MutableStateFlow(false)
     val driveError = MutableStateFlow<String?>(null)
     val driveDownloadProgress = MutableStateFlow<Float?>(null)
 
-    fun connectToDrive(token: String, context: Context) {
+    fun loadStoragePrefs(context: Context) {
+        val prefs = context.getSharedPreferences("grok_storage_prefs", Context.MODE_PRIVATE)
+        val uriStr = prefs.getString("output_dir_uri", null)
+        val nameStr = prefs.getString("output_dir_name", null)
+        val debugMode = prefs.getBoolean("verbose_debug_enabled", false)
+
+        if (!uriStr.isNullOrEmpty()) {
+            val uri = Uri.parse(uriStr)
+            customExportFolderUri.value = uri
+            customExportFolderName.value = nameStr ?: uri.lastPathSegment ?: "Custom Folder"
+        }
+        verboseDebugEnabled.value = debugMode
+        GrokLogger.isVerboseDebugEnabled.value = debugMode
+    }
+
+    fun setCustomOutputDirectory(context: Context, uri: Uri) {
+        try {
+            val takeFlags = android.content.Intent.FLAG_GRANT_READ_URI_PERMISSION or
+                            android.content.Intent.FLAG_GRANT_WRITE_URI_PERMISSION
+            context.contentResolver.takePersistableUriPermission(uri, takeFlags)
+        } catch (e: Exception) {
+            GrokLogger.warn("Could not persist URI permissions: ${e.localizedMessage}")
+        }
+
+        val docFile = androidx.documentfile.provider.DocumentFile.fromTreeUri(context, uri)
+        val folderName = docFile?.name ?: uri.lastPathSegment ?: "Custom Storage Directory"
+
+        customExportFolderUri.value = uri
+        customExportFolderName.value = folderName
+
+        val prefs = context.getSharedPreferences("grok_storage_prefs", Context.MODE_PRIVATE)
+        prefs.edit()
+            .putString("output_dir_uri", uri.toString())
+            .putString("output_dir_name", folderName)
+            .apply()
+
+        GrokLogger.info("Configured Output Location updated to: $folderName ($uri)")
+    }
+
+    fun setVerboseDebugEnabled(context: Context, enabled: Boolean) {
+        verboseDebugEnabled.value = enabled
+        GrokLogger.isVerboseDebugEnabled.value = enabled
+        val prefs = context.getSharedPreferences("grok_storage_prefs", Context.MODE_PRIVATE)
+        prefs.edit().putBoolean("verbose_debug_enabled", enabled).apply()
+        GrokLogger.info("Verbose Debug / Forensics Mode set to $enabled")
+    }
+
+    fun exportDiagnosticLog(context: Context): String {
+        val (dumpFile, dumpText) = GrokLogger.exportDiagnosticDump(context)
+        
+        // Copy to clipboard
+        try {
+            val clipboard = context.getSystemService(Context.CLIPBOARD_SERVICE) as? android.content.ClipboardManager
+            val clip = android.content.ClipData.newPlainText("Grok Diagnostic Log", dumpText)
+            clipboard?.setPrimaryClip(clip)
+            GrokLogger.info("Copied diagnostic log dump to clipboard.")
+        } catch (e: Exception) {
+            GrokLogger.warn("Failed to copy log to clipboard: ${e.localizedMessage}")
+        }
+
+        // Write to custom output SAF folder if configured
+        val targetUri = customExportFolderUri.value
+        if (targetUri != null) {
+            try {
+                val docDir = androidx.documentfile.provider.DocumentFile.fromTreeUri(context, targetUri)
+                val newFile = docDir?.createFile("text/plain", dumpFile.name)
+                if (newFile != null) {
+                    context.contentResolver.openOutputStream(newFile.uri)?.use { out ->
+                        out.write(dumpText.toByteArray(Charsets.UTF_8))
+                    }
+                    GrokLogger.info("Saved diagnostic log to SAF output directory: ${newFile.name}")
+                }
+            } catch (e: Exception) {
+                GrokLogger.error("Error writing diagnostic log to SAF output dir", e)
+            }
+        }
+
+        return dumpText
+    }
+
+    fun connectToDrive(token: String, context: Context, email: String? = null) {
         driveAccessToken.value = token
+        googleAccountEmail.value = email
         driveError.value = null
-        // Save token to preferences for convenience across sessions
         val prefs = context.getSharedPreferences("grok_drive_prefs", Context.MODE_PRIVATE)
-        prefs.edit().putString("access_token", token).apply()
+        prefs.edit()
+            .putString("access_token", token)
+            .putString("account_email", email)
+            .apply()
         fetchDriveFiles()
     }
 
     fun disconnectDrive(context: Context) {
         driveAccessToken.value = null
+        googleAccountEmail.value = null
         driveFilesList.value = emptyList()
         driveError.value = null
         val prefs = context.getSharedPreferences("grok_drive_prefs", Context.MODE_PRIVATE)
-        prefs.edit().remove("access_token").apply()
+        prefs.edit().remove("access_token").remove("account_email").apply()
     }
 
     fun loadDriveTokenFromPrefs(context: Context) {
         val prefs = context.getSharedPreferences("grok_drive_prefs", Context.MODE_PRIVATE)
         val token = prefs.getString("access_token", null)
+        val email = prefs.getString("account_email", null)
         if (!token.isNullOrEmpty()) {
             driveAccessToken.value = token
+            googleAccountEmail.value = email
             fetchDriveFiles()
         }
+        loadStoragePrefs(context)
     }
 
     fun fetchDriveFiles() {

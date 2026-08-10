@@ -83,20 +83,91 @@ object GrokParser {
             while (reader.hasNext()) {
                 val fieldName = reader.nextName()
                 when (fieldName.lowercase()) {
-                    "id", "message_id", "uuid" -> id = reader.nextString()
-                    "role", "sender", "author" -> role = reader.nextString()
-                    "text", "content", "body" -> {
+                    "id", "message_id", "uuid", "key" -> id = reader.nextString()
+                    "role", "sender", "author_role" -> {
                         val peek = reader.peek()
-                        if (peek == android.util.JsonToken.BEGIN_OBJECT) {
+                        if (peek == android.util.JsonToken.STRING) {
+                            role = reader.nextString()
+                        } else if (peek == android.util.JsonToken.BEGIN_OBJECT) {
                             reader.beginObject()
                             while (reader.hasNext()) {
-                                if (reader.nextName() == "text") {
-                                    text = reader.nextString()
+                                if (reader.nextName().lowercase() in listOf("role", "name")) {
+                                    role = reader.nextString()
                                 } else {
                                     reader.skipValue()
                                 }
                             }
                             reader.endObject()
+                        } else {
+                            reader.skipValue()
+                        }
+                    }
+                    "author" -> {
+                        val peek = reader.peek()
+                        if (peek == android.util.JsonToken.BEGIN_OBJECT) {
+                            reader.beginObject()
+                            while (reader.hasNext()) {
+                                val aKey = reader.nextName().lowercase()
+                                if (aKey in listOf("role", "name")) {
+                                    role = reader.nextString()
+                                } else {
+                                    reader.skipValue()
+                                }
+                            }
+                            reader.endObject()
+                        } else if (peek == android.util.JsonToken.STRING) {
+                            role = reader.nextString()
+                        } else {
+                            reader.skipValue()
+                        }
+                    }
+                    "text", "content", "body", "prompt", "response", "message", "part" -> {
+                        val peek = reader.peek()
+                        if (peek == android.util.JsonToken.BEGIN_OBJECT) {
+                            reader.beginObject()
+                            val sb = StringBuilder()
+                            while (reader.hasNext()) {
+                                val cKey = reader.nextName().lowercase()
+                                if (cKey in listOf("text", "content", "body", "value")) {
+                                    if (reader.peek() == android.util.JsonToken.STRING) {
+                                        sb.append(reader.nextString())
+                                    } else {
+                                        reader.skipValue()
+                                    }
+                                } else if (cKey == "parts") {
+                                    if (reader.peek() == android.util.JsonToken.BEGIN_ARRAY) {
+                                        reader.beginArray()
+                                        while (reader.hasNext()) {
+                                            if (reader.peek() == android.util.JsonToken.STRING) {
+                                                if (sb.isNotEmpty()) sb.append("\n")
+                                                sb.append(reader.nextString())
+                                            } else {
+                                                reader.skipValue()
+                                            }
+                                        }
+                                        reader.endArray()
+                                    } else {
+                                        reader.skipValue()
+                                    }
+                                } else {
+                                    reader.skipValue()
+                                }
+                            }
+                            reader.endObject()
+                            text = sb.toString()
+                        } else if (peek == android.util.JsonToken.BEGIN_ARRAY) {
+                            val sb = StringBuilder()
+                            reader.beginArray()
+                            while (reader.hasNext()) {
+                                if (reader.peek() == android.util.JsonToken.STRING) {
+                                    if (sb.isNotEmpty()) sb.append("\n")
+                                    sb.append(reader.nextString())
+                                } else {
+                                    reader.skipValue()
+                                }
+                            }
+                            reader.endArray()
+                            text = sb.toString()
                         } else if (peek == android.util.JsonToken.STRING) {
                             text = reader.nextString()
                         } else {
@@ -112,7 +183,7 @@ object GrokParser {
                             var traceText = ""
                             while (reader.hasNext()) {
                                 val name = reader.nextName()
-                                if (name in listOf("text", "content", "reasoning")) {
+                                if (name in listOf("text", "content", "reasoning", "trace")) {
                                     traceText = reader.nextString()
                                 } else {
                                     reader.skipValue()
@@ -142,24 +213,29 @@ object GrokParser {
                             reader.skipValue()
                         }
                     }
-                    "create_time", "created_at", "timestamp" -> {
+                    "create_time", "created_at", "timestamp", "time", "date" -> {
                         val peek = reader.peek()
                         if (peek == android.util.JsonToken.NUMBER) {
                             timestamp = reader.nextLong()
                             if (timestamp < 50000000000L) {
                                 timestamp *= 1000
                             }
-                        } else {
+                        } else if (peek == android.util.JsonToken.STRING) {
                             val str = reader.nextString()
                             timestamp = parseIsoToEpoch(str)
+                        } else {
+                            reader.skipValue()
                         }
                     }
-                    else -> reader.skipValue()
+                    else -> {
+                        GrokLogger.forensics("parseSingleMessage", unmappedKey = fieldName)
+                        reader.skipValue()
+                    }
                 }
             }
             reader.endObject()
         } catch (e: Exception) {
-            e.printStackTrace()
+            GrokLogger.forensics("parseSingleMessage_Exception", exception = e)
             return null
         }
 
@@ -187,42 +263,94 @@ object GrokParser {
         try {
             reader.beginObject()
             while (reader.hasNext()) {
-                when (reader.nextName()) {
-                    "id", "conversation_id", "uuid" -> id = reader.nextString()
-                    "title", "subject", "name" -> title = reader.nextString()
-                    "create_time", "created_at", "timestamp" -> {
+                val fieldName = reader.nextName()
+                when (fieldName.lowercase()) {
+                    "id", "conversation_id", "uuid", "chat_id" -> {
+                        if (reader.peek() == android.util.JsonToken.STRING) {
+                            id = reader.nextString()
+                        } else {
+                            reader.skipValue()
+                        }
+                    }
+                    "title", "subject", "name", "topic" -> {
+                        if (reader.peek() == android.util.JsonToken.STRING) {
+                            title = reader.nextString()
+                        } else {
+                            reader.skipValue()
+                        }
+                    }
+                    "create_time", "created_at", "timestamp", "updated_at", "time", "date" -> {
                         val peek = reader.peek()
                         if (peek == android.util.JsonToken.NUMBER) {
                             timestamp = reader.nextLong()
                             if (timestamp < 50000000000L) {
                                 timestamp *= 1000
                             }
-                        } else {
+                        } else if (peek == android.util.JsonToken.STRING) {
                             val str = reader.nextString()
                             timestamp = parseIsoToEpoch(str)
+                        } else {
+                            reader.skipValue()
                         }
                     }
-                    "messages", "chat_messages", "parts" -> {
-                        reader.beginArray()
-                        while (reader.hasNext()) {
-                            val msg = parseSingleMessage(reader, enablePiiScrubbing)
-                            if (msg != null) {
-                                messages.add(msg)
+                    "messages", "chat_messages", "parts", "responses", "conversation", "turns", "dialogue", "history" -> {
+                        if (reader.peek() == android.util.JsonToken.BEGIN_ARRAY) {
+                            reader.beginArray()
+                            while (reader.hasNext()) {
+                                val msg = parseSingleMessage(reader, enablePiiScrubbing)
+                                if (msg != null) {
+                                    messages.add(msg)
+                                }
                             }
+                            reader.endArray()
+                        } else {
+                            reader.skipValue()
                         }
-                        reader.endArray()
                     }
-                    else -> reader.skipValue()
+                    "mapping" -> {
+                        if (reader.peek() == android.util.JsonToken.BEGIN_OBJECT) {
+                            reader.beginObject()
+                            while (reader.hasNext()) {
+                                val nodeId = reader.nextName()
+                                if (reader.peek() == android.util.JsonToken.BEGIN_OBJECT) {
+                                    reader.beginObject()
+                                    while (reader.hasNext()) {
+                                        val mKey = reader.nextName()
+                                        if (mKey.lowercase() == "message" && reader.peek() == android.util.JsonToken.BEGIN_OBJECT) {
+                                            val msg = parseSingleMessage(reader, enablePiiScrubbing)
+                                            if (msg != null && msg.text.isNotBlank()) {
+                                                messages.add(msg)
+                                            }
+                                        } else {
+                                            reader.skipValue()
+                                        }
+                                    }
+                                    reader.endObject()
+                                } else {
+                                    reader.skipValue()
+                                }
+                            }
+                            reader.endObject()
+                        } else {
+                            reader.skipValue()
+                        }
+                    }
+                    else -> {
+                        GrokLogger.forensics("parseSingleConversation", unmappedKey = fieldName)
+                        reader.skipValue()
+                    }
                 }
             }
             reader.endObject()
         } catch (e: Exception) {
-            e.printStackTrace()
+            GrokLogger.forensics("parseSingleConversation_Exception", exception = e)
             return null
         }
 
         if (id.isEmpty()) id = UUID.randomUUID().toString()
         if (timestamp == 0L) timestamp = System.currentTimeMillis()
+
+        messages.sortBy { it.timestamp }
 
         return Conversation(id, title, timestamp, messages)
     }
@@ -371,14 +499,118 @@ object GrokParser {
                 }
                 reader.endArray()
             } else if (token == android.util.JsonToken.BEGIN_OBJECT) {
-                GrokLogger.info("Detected Schema B (Object Schema or Single Conversation Blob)")
-                // Read single conversation or root object container
+                GrokLogger.info("Detected Schema B (Object Schema or Root Object Container)")
                 var count = 0
-                var parsedAsSingle = false
-                
-                val singleConv = parseSingleConversation(reader, enablePiiScrubbing)
-                if (singleConv != null && singleConv.messages.isNotEmpty()) {
-                    parsedAsSingle = true
+                reader.beginObject()
+
+                val rootMessages = mutableListOf<Message>()
+                var rootId = ""
+                var rootTitle = ""
+                var rootTimestamp = 0L
+
+                while (reader.hasNext()) {
+                    val key = reader.nextName()
+                    val pToken = reader.peek()
+                    when (key.lowercase()) {
+                        "id", "conversation_id", "uuid", "chat_id" -> {
+                            if (pToken == android.util.JsonToken.STRING) rootId = reader.nextString() else reader.skipValue()
+                        }
+                        "title", "subject", "name", "topic" -> {
+                            if (pToken == android.util.JsonToken.STRING) rootTitle = reader.nextString() else reader.skipValue()
+                        }
+                        "create_time", "created_at", "timestamp", "time" -> {
+                            if (pToken == android.util.JsonToken.NUMBER) {
+                                rootTimestamp = reader.nextLong()
+                                if (rootTimestamp < 50000000000L) rootTimestamp *= 1000
+                            } else if (pToken == android.util.JsonToken.STRING) {
+                                rootTimestamp = parseIsoToEpoch(reader.nextString())
+                            } else {
+                                reader.skipValue()
+                            }
+                        }
+                        "conversations", "chats", "history", "data", "items", "export", "records", "payload" -> {
+                            if (pToken == android.util.JsonToken.BEGIN_ARRAY) {
+                                reader.beginArray()
+                                while (reader.hasNext()) {
+                                    val conv = parseSingleConversation(reader, enablePiiScrubbing)
+                                    if (conv != null && (conv.messages.isNotEmpty() || conv.title.isNotBlank())) {
+                                        stats.totalConversations++
+                                        val matchesDate = (startDate == null || conv.timestamp >= startDate) &&
+                                                          (endDate == null || conv.timestamp <= endDate)
+                                        if (matchesDate) {
+                                            list.add(conv)
+                                            stats.filteredConversations++
+                                            stats.totalUserMessages += conv.messages.count { it.role.lowercase() == "user" }
+                                            stats.totalGrokMessages += conv.messages.count { it.role.lowercase() in listOf("grok", "assistant") }
+                                            stats.totalCharacters += conv.messages.sumOf { it.text.length.toLong() }
+                                            if (conv.timestamp < stats.dateMin) stats.dateMin = conv.timestamp
+                                            if (conv.timestamp > stats.dateMax) stats.dateMax = conv.timestamp
+                                        }
+                                        count++
+                                        if (count % 10 == 0) {
+                                            onProgress(count)
+                                            onStatsUpdate(stats.copy())
+                                        }
+                                    }
+                                }
+                                reader.endArray()
+                            } else {
+                                reader.skipValue()
+                            }
+                        }
+                        "messages", "chat_messages", "parts", "responses", "turns", "dialogue" -> {
+                            if (pToken == android.util.JsonToken.BEGIN_ARRAY) {
+                                reader.beginArray()
+                                while (reader.hasNext()) {
+                                    val msg = parseSingleMessage(reader, enablePiiScrubbing)
+                                    if (msg != null) rootMessages.add(msg)
+                                }
+                                reader.endArray()
+                            } else {
+                                reader.skipValue()
+                            }
+                        }
+                        "mapping" -> {
+                            if (pToken == android.util.JsonToken.BEGIN_OBJECT) {
+                                reader.beginObject()
+                                while (reader.hasNext()) {
+                                    reader.nextName()
+                                    if (reader.peek() == android.util.JsonToken.BEGIN_OBJECT) {
+                                        reader.beginObject()
+                                        while (reader.hasNext()) {
+                                            val mKey = reader.nextName()
+                                            if (mKey.lowercase() == "message" && reader.peek() == android.util.JsonToken.BEGIN_OBJECT) {
+                                                val msg = parseSingleMessage(reader, enablePiiScrubbing)
+                                                if (msg != null && msg.text.isNotBlank()) {
+                                                    rootMessages.add(msg)
+                                                }
+                                            } else {
+                                                reader.skipValue()
+                                            }
+                                        }
+                                        reader.endObject()
+                                    } else {
+                                        reader.skipValue()
+                                    }
+                                }
+                                reader.endObject()
+                            } else {
+                                reader.skipValue()
+                            }
+                        }
+                        else -> {
+                            GrokLogger.forensics("parseConversationsStream_RootObject", unmappedKey = key)
+                            reader.skipValue()
+                        }
+                    }
+                }
+                reader.endObject()
+
+                if (rootMessages.isNotEmpty()) {
+                    if (rootId.isEmpty()) rootId = UUID.randomUUID().toString()
+                    if (rootTimestamp == 0L) rootTimestamp = System.currentTimeMillis()
+                    rootMessages.sortBy { it.timestamp }
+                    val singleConv = Conversation(rootId, rootTitle.ifEmpty { "Exported Conversation" }, rootTimestamp, rootMessages)
                     stats.totalConversations++
                     val matchesDate = (startDate == null || singleConv.timestamp >= startDate) &&
                                       (endDate == null || singleConv.timestamp <= endDate)
@@ -393,10 +625,6 @@ object GrokParser {
                     }
                     onProgress(1)
                     onStatsUpdate(stats.copy())
-                }
-
-                if (!parsedAsSingle) {
-                    GrokLogger.warn("Attempting fallback nested root key traversal...")
                 }
             }
             GrokLogger.info("Completed JSON Stream Parsing! Total parsed: ${stats.totalConversations}, Matching criteria: ${stats.filteredConversations}")
