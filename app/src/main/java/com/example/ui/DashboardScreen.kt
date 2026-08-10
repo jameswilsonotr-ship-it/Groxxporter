@@ -1117,6 +1117,109 @@ fun ExportControlCard(
                         }
                     }
 
+                    Spacer(modifier = Modifier.height(14.dp))
+
+                    // PII Scrubbing Switch
+                    val piiScrubbing by viewModel.piiScrubbingEnabled.collectAsState()
+                    Row(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .background(CyberBg, RoundedCornerShape(8.dp))
+                            .border(1.dp, if (piiScrubbing) CyberOrange else CyberBorder, RoundedCornerShape(8.dp))
+                            .padding(horizontal = 12.dp, vertical = 8.dp),
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.SpaceBetween
+                    ) {
+                        Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.weight(1f)) {
+                            Icon(
+                                imageVector = Icons.Default.Security,
+                                contentDescription = null,
+                                tint = if (piiScrubbing) CyberOrange else CyberTextMuted,
+                                modifier = Modifier.size(18.dp)
+                            )
+                            Spacer(modifier = Modifier.width(8.dp))
+                            Column {
+                                Text("Automated PII Scrubbing", color = CyberText, fontSize = 12.sp, fontWeight = FontWeight.SemiBold)
+                                Text("Redacts emails, phone numbers, SSNs, and IPs", color = CyberTextMuted, fontSize = 10.sp)
+                            }
+                        }
+                        Switch(
+                            checked = piiScrubbing,
+                            onCheckedChange = { viewModel.piiScrubbingEnabled.value = it },
+                            colors = SwitchDefaults.colors(
+                                checkedThumbColor = CyberOrange,
+                                checkedTrackColor = CyberOrange.copy(alpha = 0.3f),
+                                uncheckedBorderColor = CyberBorder
+                            )
+                        )
+                    }
+
+                    Spacer(modifier = Modifier.height(14.dp))
+
+                    // Export Target Format Selector
+                    val selectedTargetFormat by viewModel.exportTargetFormat.collectAsState()
+                    Text("Target Export Format Schema", color = CyberText, fontSize = 12.sp, fontWeight = FontWeight.SemiBold)
+                    Spacer(modifier = Modifier.height(6.dp))
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.spacedBy(6.dp)
+                    ) {
+                        com.example.parser.ExportTargetFormat.values().forEach { fmt ->
+                            val isSel = selectedTargetFormat == fmt
+                            Box(
+                                modifier = Modifier
+                                    .weight(1f)
+                                    .background(if (isSel) CyberCyan.copy(alpha = 0.2f) else CyberBg, RoundedCornerShape(6.dp))
+                                    .border(1.dp, if (isSel) CyberCyan else CyberBorder, RoundedCornerShape(6.dp))
+                                    .clickable { viewModel.exportTargetFormat.value = fmt }
+                                    .padding(vertical = 8.dp),
+                                contentAlignment = Alignment.Center
+                            ) {
+                                Text(
+                                    text = fmt.name.replace("_", " "),
+                                    fontSize = 9.sp,
+                                    fontWeight = if (isSel) FontWeight.Bold else FontWeight.Normal,
+                                    color = if (isSel) CyberCyan else CyberTextMuted,
+                                    textAlign = TextAlign.Center
+                                )
+                            }
+                        }
+                    }
+
+                    Spacer(modifier = Modifier.height(14.dp))
+
+                    // Cryptographic Verification Status Badge
+                    val verificationStatus by viewModel.sha256VerificationStatus.collectAsState()
+                    Row(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .background(CyberBg, RoundedCornerShape(8.dp))
+                            .border(1.dp, CyberBorder, RoundedCornerShape(8.dp))
+                            .padding(horizontal = 12.dp, vertical = 8.dp),
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.SpaceBetween
+                    ) {
+                        Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.weight(1f)) {
+                            Icon(
+                                imageVector = Icons.Default.VpnKey,
+                                contentDescription = null,
+                                tint = CyberCyan,
+                                modifier = Modifier.size(16.dp)
+                            )
+                            Spacer(modifier = Modifier.width(8.dp))
+                            Text("SHA-256 Verification Status:", color = CyberTextMuted, fontSize = 11.sp)
+                        }
+                        Text(
+                            text = verificationStatus ?: "NOT_VERIFIED",
+                            color = if (verificationStatus?.contains("PASSED") == true || verificationStatus?.contains("OK") == true) CyberCyan else CyberOrange,
+                            fontSize = 10.sp,
+                            fontWeight = FontWeight.Bold,
+                            fontFamily = FontFamily.Monospace,
+                            maxLines = 1,
+                            overflow = TextOverflow.Ellipsis
+                        )
+                    }
+
                     Spacer(modifier = Modifier.height(16.dp))
                     Divider(color = CyberBorder)
                     Spacer(modifier = Modifier.height(12.dp))

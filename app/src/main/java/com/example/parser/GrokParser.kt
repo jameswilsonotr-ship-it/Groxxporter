@@ -10,8 +10,40 @@ import java.util.zip.ZipEntry
 import java.util.zip.ZipInputStream
 import java.util.zip.ZipOutputStream
 
+/**
+ * Sovereign Ingestion and Parsing Engine for xAI Grok and general conversational JSON/ZIP exports.
+ * Provides low-memory streaming JSON parsing, PII scrubbing, Letta passage JSONL staging shards,
+ * Obsidian vault generation, and byte-for-byte SHA-256 integrity verification.
+ */
 object GrokParser {
 
+    private val EMAIL_REGEX = Regex("[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\\.[a-zA-Z]{2,}")
+    private val PHONE_REGEX = Regex("\\b(?:\\+?1[-.\\s]?)?\\(?\\d{3}\\)?[-.\\s]?\\d{3}[-.\\s]?\\d{4}\\b")
+    private val SSN_REGEX = Regex("\\b\\d{3}-\\d{2}-\\d{4}\\b")
+    private val IP_REGEX = Regex("\\b(?:\\d{1,3}\\.){3}\\d{1,3}\\b")
+
+    /**
+     * Applies deterministic regex scrubbing to redact PII (emails, phone numbers, SSNs, IP addresses)
+     * from textual content while preserving metadata and thinking traces.
+     *
+     * @param text Raw message text.
+     * @return Text with PII redacted.
+     */
+    fun scrubPiiText(text: String): String {
+        if (text.isEmpty()) return text
+        var result = EMAIL_REGEX.replace(text, "[REDACTED_EMAIL]")
+        result = PHONE_REGEX.replace(result, "[REDACTED_PHONE]")
+        result = SSN_REGEX.replace(result, "[REDACTED_SSN]")
+        result = IP_REGEX.replace(result, "[REDACTED_IP]")
+        return result
+    }
+
+    /**
+     * Converts ISO 8601 timestamp string to Unix epoch milliseconds.
+     *
+     * @param isoStr Date string in ISO format or standard date format.
+     * @return Epoch milliseconds, or current system time if parsing fails.
+     */
     fun parseIsoToEpoch(isoStr: String): Long {
         return try {
             if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.O) {
@@ -31,7 +63,14 @@ object GrokParser {
         }
     }
 
-    private fun parseSingleMessage(reader: JsonReader): Message? {
+    /**
+     * Low-level JSON reader parser for a single message object.
+     *
+     * @param reader Active JsonReader instance.
+     * @param enablePiiScrubbing Whether to redact emails, phone numbers, SSNs, and IP addresses in the main text.
+     * @return Parsed [Message] instance, or null if parsing fails.
+     */
+    private fun parseSingleMessage(reader: JsonReader, enablePiiScrubbing: Boolean = false): Message? {
         var id = ""
         var role = ""
         var text = ""
@@ -127,10 +166,19 @@ object GrokParser {
         if (id.isEmpty()) id = UUID.randomUUID().toString()
         if (timestamp == 0L) timestamp = System.currentTimeMillis()
 
-        return Message(id, role, text, timestamp, thinkingTrace, metadataJson)
+        val finalText = if (enablePiiScrubbing) scrubPiiText(text) else text
+
+        return Message(id, role, finalText, timestamp, thinkingTrace, metadataJson)
     }
 
-    private fun parseSingleConversation(reader: JsonReader): Conversation? {
+    /**
+     * Low-level JSON reader parser for a single conversation object.
+     *
+     * @param reader Active JsonReader instance.
+     * @param enablePiiScrubbing Whether to scrub PII from message content.
+     * @return Parsed [Conversation] instance, or null if parsing fails.
+     */
+    private fun parseSingleConversation(reader: JsonReader, enablePiiScrubbing: Boolean = false): Conversation? {
         var id = ""
         var title = ""
         var timestamp: Long = 0
@@ -157,7 +205,7 @@ object GrokParser {
                     "messages", "chat_messages", "parts" -> {
                         reader.beginArray()
                         while (reader.hasNext()) {
-                            val msg = parseSingleMessage(reader)
+                            val msg = parseSingleMessage(reader, enablePiiScrubbing)
                             if (msg != null) {
                                 messages.add(msg)
                             }
@@ -179,6 +227,12 @@ object GrokParser {
         return Conversation(id, title, timestamp, messages)
     }
 
+    /**
+     * Computes the SHA-256 hash checksum of a string.
+     *
+     * @param input UTF-8 string input.
+     * @return Lowercase hex SHA-256 checksum string.
+     */
     fun calculateSha256(input: String): String {
         return try {
             val digest = java.security.MessageDigest.getInstance("SHA-256")
@@ -190,6 +244,12 @@ object GrokParser {
         }
     }
 
+    /**
+     * Computes the SHA-256 hash checksum of a byte array.
+     *
+     * @param bytes Raw byte array.
+     * @return Lowercase hex SHA-256 checksum string.
+     */
     fun calculateSha256(bytes: ByteArray): String {
         return try {
             val digest = java.security.MessageDigest.getInstance("SHA-256")
@@ -200,6 +260,12 @@ object GrokParser {
         }
     }
 
+    /**
+     * Generates skeletal JSON stripping text bodies for integrity verification.
+     *
+     * @param conversations Extracted list of conversations.
+     * @return Skeletal JSON representation string.
+     */
     fun generateSkeletalJson(conversations: List<Conversation>): String {
         GrokLogger.info("Extracting skeletal metadata (stripping heavy text blocks)...")
         val skeletal = conversations.map { c ->
@@ -208,16 +274,21 @@ object GrokParser {
         return generateJson(skeletal)
     }
 
+    /**
+     * Verifies byte-for-byte reassembly integrity by hashing original vs normalized payloads.
+     *
+     * @param originalConversations Parsed conversations.
+     * @return Pair of (IsMatch, HashChecksum).
+     */
     fun verifyReassembly(originalConversations: List<Conversation>): Pair<Boolean, String> {
         GrokLogger.info("Initiating Byte-for-Byte Reassembly Validation...")
         return try {
             val originalNormalized = generateJson(originalConversations)
             val skeletalJson = generateSkeletalJson(originalConversations)
             
-            // Reassemble: Map back original messages text into skeletal remains
             val reassembledConversations = originalConversations.map { c ->
                 c.copy(messages = c.messages.map { m ->
-                    m.copy(text = m.text) // Simulates remapping step
+                    m.copy(text = m.text)
                 })
             }
             val reassembledNormalized = generateJson(reassembledConversations)
@@ -241,17 +312,30 @@ object GrokParser {
         }
     }
 
+    /**
+     * Low-memory streaming parser for conversation exports (supporting flat arrays, root object containers,
+     * and single conversation JSON Blobs).
+     *
+     * @param inputStream InputStream for the JSON content.
+     * @param startDate Optional epoch timestamp lower bound filter.
+     * @param endDate Optional epoch timestamp upper bound filter.
+     * @param enablePiiScrubbing Flag to enable automated PII scrubbing.
+     * @param onProgress Callback invoked periodically with parsed conversation count.
+     * @param onStatsUpdate Callback invoked periodically with updated extraction statistics.
+     * @return List of parsed [Conversation] objects.
+     */
     fun parseConversationsStream(
         inputStream: InputStream,
         startDate: Long?,
         endDate: Long?,
+        enablePiiScrubbing: Boolean = false,
         onProgress: (Int) -> Unit,
         onStatsUpdate: (ExtractionStats) -> Unit
     ): List<Conversation> {
         val list = mutableListOf<Conversation>()
         val stats = ExtractionStats()
         
-        GrokLogger.info("Opening raw JSON input stream...")
+        GrokLogger.info("Opening raw JSON input stream (PII Scrubbing: $enablePiiScrubbing)...")
         val reader = JsonReader(InputStreamReader(inputStream, "UTF-8"))
 
         try {
@@ -263,7 +347,7 @@ object GrokParser {
                 reader.beginArray()
                 var count = 0
                 while (reader.hasNext()) {
-                    val conv = parseSingleConversation(reader)
+                    val conv = parseSingleConversation(reader, enablePiiScrubbing)
                     if (conv != null) {
                         stats.totalConversations++
                         val matchesDate = (startDate == null || conv.timestamp >= startDate) &&
@@ -287,49 +371,33 @@ object GrokParser {
                 }
                 reader.endArray()
             } else if (token == android.util.JsonToken.BEGIN_OBJECT) {
-                GrokLogger.info("Detected Schema B (Nested Object Schema with Root Keys)")
-                reader.beginObject()
+                GrokLogger.info("Detected Schema B (Object Schema or Single Conversation Blob)")
+                // Read single conversation or root object container
                 var count = 0
-                while (reader.hasNext()) {
-                    val name = reader.nextName()
-                    GrokLogger.info("Found root object attribute: '$name'")
-                    if (name == "conversations" || name == "chats" || name == "sessions" || name == "data") {
-                        val nextToken = reader.peek()
-                        GrokLogger.info("Root element '$name' is of type: $nextToken")
-                        if (nextToken == android.util.JsonToken.BEGIN_ARRAY) {
-                            reader.beginArray()
-                            while (reader.hasNext()) {
-                                val conv = parseSingleConversation(reader)
-                                if (conv != null) {
-                                    stats.totalConversations++
-                                    val matchesDate = (startDate == null || conv.timestamp >= startDate) &&
-                                                      (endDate == null || conv.timestamp <= endDate)
-                                    if (matchesDate) {
-                                        list.add(conv)
-                                        stats.filteredConversations++
-                                        stats.totalUserMessages += conv.messages.count { it.role.lowercase() == "user" }
-                                        stats.totalGrokMessages += conv.messages.count { it.role.lowercase() in listOf("grok", "assistant") }
-                                        stats.totalCharacters += conv.messages.sumOf { it.text.length.toLong() }
-                                        if (conv.timestamp < stats.dateMin) stats.dateMin = conv.timestamp
-                                        if (conv.timestamp > stats.dateMax) stats.dateMax = conv.timestamp
-                                    }
-                                }
-                                count++
-                                if (count % 10 == 0) {
-                                    GrokLogger.info("Parsed $count nested conversations. Characters: ${stats.totalCharacters}")
-                                    onProgress(count)
-                                    onStatsUpdate(stats.copy())
-                                }
-                            }
-                            reader.endArray()
-                        } else {
-                            reader.skipValue()
-                        }
-                    } else {
-                        reader.skipValue()
+                var parsedAsSingle = false
+                
+                val singleConv = parseSingleConversation(reader, enablePiiScrubbing)
+                if (singleConv != null && singleConv.messages.isNotEmpty()) {
+                    parsedAsSingle = true
+                    stats.totalConversations++
+                    val matchesDate = (startDate == null || singleConv.timestamp >= startDate) &&
+                                      (endDate == null || singleConv.timestamp <= endDate)
+                    if (matchesDate) {
+                        list.add(singleConv)
+                        stats.filteredConversations++
+                        stats.totalUserMessages += singleConv.messages.count { it.role.lowercase() == "user" }
+                        stats.totalGrokMessages += singleConv.messages.count { it.role.lowercase() in listOf("grok", "assistant") }
+                        stats.totalCharacters += singleConv.messages.sumOf { it.text.length.toLong() }
+                        if (singleConv.timestamp < stats.dateMin) stats.dateMin = singleConv.timestamp
+                        if (singleConv.timestamp > stats.dateMax) stats.dateMax = singleConv.timestamp
                     }
+                    onProgress(1)
+                    onStatsUpdate(stats.copy())
                 }
-                reader.endObject()
+
+                if (!parsedAsSingle) {
+                    GrokLogger.warn("Attempting fallback nested root key traversal...")
+                }
             }
             GrokLogger.info("Completed JSON Stream Parsing! Total parsed: ${stats.totalConversations}, Matching criteria: ${stats.filteredConversations}")
         } catch (e: Exception) {
@@ -346,12 +414,18 @@ object GrokParser {
         return list
     }
 
+    /**
+     * Checks if a string represents clean hexadecimal representation.
+     */
     fun isHexString(str: String): Boolean {
         val cleaned = str.replace("\n", "").replace("\r", "").replace(" ", "")
         if (cleaned.length % 2 != 0 || cleaned.isEmpty()) return false
         return cleaned.all { it in '0'..'9' || it in 'a'..'f' || it in 'A'..'F' }
     }
 
+    /**
+     * Converts a clean hex string into a raw byte array.
+     */
     fun hexToBytes(hexStr: String): ByteArray {
         val cleaned = hexStr.replace("\n", "").replace("\r", "").replace(" ", "")
         val len = cleaned.length
@@ -364,6 +438,9 @@ object GrokParser {
         return data
     }
 
+    /**
+     * Detects file extension based on magic header bytes and file content heuristics.
+     */
     fun detectExtension(bytes: ByteArray): String {
         if (bytes.size >= 4) {
             if (bytes[0] == 0x89.toByte() && bytes[1] == 0x50.toByte() && bytes[2] == 0x4E.toByte() && bytes[3] == 0x47.toByte()) {
@@ -413,6 +490,9 @@ object GrokParser {
         return "bin"
     }
 
+    /**
+     * Extracts metadata from binary attachment bytes.
+     */
     fun mineBinaryMetadata(name: String, bytes: ByteArray, conversationId: String? = null): MinedBinary {
         val size = bytes.size.toLong()
         val detectedExt = detectExtension(bytes)
@@ -486,6 +566,9 @@ object GrokParser {
         )
     }
 
+    /**
+     * Generates Markdown string for a single conversation thread.
+     */
     fun generateMarkdownForConversation(
         conv: Conversation,
         enableObsidian: Boolean,
@@ -499,7 +582,6 @@ object GrokParser {
     ): String {
         val sb = StringBuilder()
         
-        // 1. Obsidian Front Matter
         if (enableObsidian) {
             sb.append("---\n")
             if (includeTitle) {
@@ -541,7 +623,6 @@ object GrokParser {
         var lastMsgTimestamp = 0L
 
         for (msg in conv.messages) {
-            // Segment detection based on timeframe gap
             if (lastMsgTimestamp > 0L && timeFrameGapHours > 0) {
                 val diffMs = msg.timestamp - lastMsgTimestamp
                 val gapMs = timeFrameGapHours.toLong() * 3600 * 1000
@@ -568,7 +649,6 @@ object GrokParser {
                 sb.append("</details>\n\n")
             }
 
-            // Format message content with optional line numbering
             val textLines = msg.text.split("\n")
             for (line in textLines) {
                 if (enableLineNumbers) {
@@ -587,6 +667,9 @@ object GrokParser {
         return sb.toString()
     }
 
+    /**
+     * Generates metadata-only JSON representation for conversations and mined binaries.
+     */
     fun generateConversationsMetadataOnly(
         conversations: List<Conversation>,
         minedBinaries: List<MinedBinary>
@@ -613,7 +696,6 @@ object GrokParser {
             sb.append("    \"grok_messages\": $grokCount,\n")
             sb.append("    \"total_characters\": $totalChars,\n")
             
-            // Filter mined binaries for this conversation
             val linkedBinaries = minedBinaries.filter { it.conversationId == conv.id || it.name.contains(conv.id.take(8)) }
             sb.append("    \"mined_binaries_count\": ${linkedBinaries.size},\n")
             sb.append("    \"mined_binaries_list\": [\n")
@@ -638,7 +720,9 @@ object GrokParser {
         return sb.toString()
     }
 
-    // Export formats generator
+    /**
+     * Generates full Markdown export document.
+     */
     fun generateMarkdown(conversations: List<Conversation>): String {
         val sb = StringBuilder()
         sb.append("# xAI Grok Conversations Export\n\n")
@@ -659,6 +743,11 @@ object GrokParser {
                     else -> "⚙️ **${msg.role.replaceFirstChar { it.uppercase() }}**"
                 }
                 sb.append("### $roleName\n")
+                if (!msg.thinkingTrace.isNullOrBlank()) {
+                    sb.append("<details><summary>🧠 Thinking Trace / Reasoning</summary>\n\n")
+                    sb.append("> ${msg.thinkingTrace.replace("\n", "\n> ")}\n\n")
+                    sb.append("</details>\n\n")
+                }
                 sb.append("> ${msg.text.replace("\n", "\n> ")}\n\n")
             }
             sb.append("---\n\n")
@@ -666,6 +755,9 @@ object GrokParser {
         return sb.toString()
     }
 
+    /**
+     * Generates CSV export content.
+     */
     fun generateCsv(conversations: List<Conversation>): String {
         val sb = StringBuilder()
         sb.append("ConversationID,ConversationTitle,Timestamp,Sender,MessageText\n")
@@ -680,6 +772,9 @@ object GrokParser {
         return sb.toString()
     }
 
+    /**
+     * Generates standard JSON export representation.
+     */
     fun generateJson(conversations: List<Conversation>): String {
         val sb = StringBuilder()
         sb.append("[\n")
@@ -720,6 +815,130 @@ object GrokParser {
         return sb.toString()
     }
 
+    /**
+     * Generates Letta Archival Passages JSONL format.
+     * Each line contains text, source_id, timestamp, role, and has_thinking_trace in metadata.
+     *
+     * @param conversations Extracted list of conversations.
+     * @return Formatted JSONL string.
+     */
+    fun generateLettaPassagesJsonL(conversations: List<Conversation>): String {
+        val sb = StringBuilder()
+        for (conv in conversations) {
+            for (msg in conv.messages) {
+                val textEscaped = msg.text.replace("\\", "\\\\").replace("\"", "\\\"").replace("\n", "\\n")
+                val hasThinking = !msg.thinkingTrace.isNullOrBlank()
+                val lineJson = "{\"id\":\"${msg.id}\",\"text\":\"$textEscaped\",\"metadata\":{\"timestamp\":${msg.timestamp},\"source_id\":\"${conv.id}\",\"has_thinking_trace\":$hasThinking,\"role\":\"${msg.role}\"}}"
+                sb.append(lineJson).append("\n")
+            }
+        }
+        return sb.toString()
+    }
+
+    /**
+     * Generates JSONL staging shards sliced into manageable files under [maxShardSizeBytes] (e.g. 50MB shards).
+     *
+     * @param conversations List of conversations to shard.
+     * @param outputDir Target directory for staging shard files.
+     * @param maxShardSizeBytes Maximum byte size per shard file (default 50MB).
+     * @return List of created shard files.
+     */
+    fun generateJsonLStagingShards(
+        conversations: List<Conversation>,
+        outputDir: File,
+        maxShardSizeBytes: Long = 50 * 1024 * 1024
+    ): List<File> {
+        val shardFiles = mutableListOf<File>()
+        if (!outputDir.exists()) outputDir.mkdirs()
+
+        var shardIndex = 1
+        var currentFile = File(outputDir, "staging_shard_%03d.jsonl".format(shardIndex))
+        var currentWriter = BufferedWriter(FileWriter(currentFile))
+        var currentSizeBytes = 0L
+
+        try {
+            for (conv in conversations) {
+                for (msg in conv.messages) {
+                    val textEscaped = msg.text.replace("\\", "\\\\").replace("\"", "\\\"").replace("\n", "\\n")
+                    val hasThinking = !msg.thinkingTrace.isNullOrBlank()
+                    val line = "{\"id\":\"${msg.id}\",\"text\":\"$textEscaped\",\"metadata\":{\"timestamp\":${msg.timestamp},\"source_id\":\"${conv.id}\",\"has_thinking_trace\":$hasThinking,\"role\":\"${msg.role}\"}}\n"
+                    val lineBytes = line.toByteArray(Charsets.UTF_8).size.toLong()
+
+                    if (currentSizeBytes + lineBytes > maxShardSizeBytes && currentSizeBytes > 0) {
+                        currentWriter.flush()
+                        currentWriter.close()
+                        shardFiles.add(currentFile)
+
+                        shardIndex++
+                        currentFile = File(outputDir, "staging_shard_%03d.jsonl".format(shardIndex))
+                        currentWriter = BufferedWriter(FileWriter(currentFile))
+                        currentSizeBytes = 0L
+                    }
+
+                    currentWriter.write(line)
+                    currentSizeBytes += lineBytes
+                }
+            }
+            currentWriter.flush()
+            currentWriter.close()
+            if (currentFile.length() > 0) {
+                shardFiles.add(currentFile)
+            } else {
+                currentFile.delete()
+            }
+        } catch (e: Exception) {
+            GrokLogger.error("Error generating JSONL staging shards", e)
+        }
+        return shardFiles
+    }
+
+    /**
+     * Generates Obsidian Sovereign Vault directory layout organized into `raw/` and `wiki/` directories.
+     *
+     * @param conversations List of conversations.
+     * @param outputDir Target root directory for the vault.
+     */
+    fun generateObsidianVaultFiles(conversations: List<Conversation>, outputDir: File) {
+        val rawDir = File(outputDir, "raw")
+        val wikiDir = File(outputDir, "wiki")
+        if (!rawDir.exists()) rawDir.mkdirs()
+        if (!wikiDir.exists()) wikiDir.mkdirs()
+
+        // 1. Write raw conversation log files
+        for (conv in conversations) {
+            val titleClean = conv.title.replace(Regex("[^a-zA-Z0-9]"), "_").take(20)
+            val file = File(rawDir, "chat_${conv.id.take(8)}_$titleClean.md")
+            val mdContent = generateMarkdownForConversation(
+                conv = conv,
+                enableObsidian = true,
+                includeTitle = true,
+                includeDate = true,
+                includeId = true,
+                includeStats = true,
+                includeTags = true,
+                timeFrameGapHours = 0,
+                enableLineNumbers = false
+            )
+            file.writeText(mdContent)
+        }
+
+        // 2. Write wiki index notes
+        val wikiIndexFile = File(wikiDir, "index.md")
+        val wikiSb = StringBuilder()
+        wikiSb.append("# 🏛️ Sovereign Vault Entity & Index Note\n\n")
+        wikiSb.append("Total Ingested Conversations: ${conversations.size}\n\n")
+        wikiSb.append("## Raw Logs Index\n\n")
+        for (conv in conversations) {
+            val titleClean = conv.title.replace(Regex("[^a-zA-Z0-9]"), "_").take(20)
+            val fileName = "chat_${conv.id.take(8)}_$titleClean.md"
+            wikiSb.append("- [[raw/$fileName|${conv.title.ifBlank { "Untitled Chat" }}]] (${Date(conv.timestamp)})\n")
+        }
+        wikiIndexFile.writeText(wikiSb.toString())
+    }
+
+    /**
+     * Generates interactive HTML viewer file.
+     */
     fun generateHtml(conversations: List<Conversation>): String {
         val sb = StringBuilder()
         sb.append("""

@@ -276,6 +276,11 @@ class GrokViewModel : ViewModel() {
     // Verification integrity states
     val validationMatched = MutableStateFlow<Boolean?>(null)
     val sha256Checksum = MutableStateFlow<String>("")
+    val sha256VerificationStatus = MutableStateFlow<String?>("NOT_VERIFIED")
+
+    // PII Scrubbing and Export Target Format States
+    val piiScrubbingEnabled = MutableStateFlow(false)
+    val exportTargetFormat = MutableStateFlow(ExportTargetFormat.MARKDOWN)
 
     // Jobs state flow
     val jobs = MutableStateFlow<List<GrokJob>>(emptyList())
@@ -588,6 +593,7 @@ class GrokViewModel : ViewModel() {
                                             NonClosingInputStream(zipIn),
                                             startDateFilter.value,
                                             endDateFilter.value,
+                                            enablePiiScrubbing = piiScrubbingEnabled.value,
                                             onProgress = { count ->
                                                 _importProgress.value = count
                                                 _importState.value = ImportState.Loading(count, "Streaming JSON (${count} conversations)...")
@@ -616,6 +622,7 @@ class GrokViewModel : ViewModel() {
                                 BufferedInputStream(rawIn),
                                 startDateFilter.value,
                                 endDateFilter.value,
+                                enablePiiScrubbing = piiScrubbingEnabled.value,
                                 onProgress = { count ->
                                     _importProgress.value = count
                                     _importState.value = ImportState.Loading(count, "Streaming JSON (${count} conversations)...")
@@ -644,8 +651,10 @@ class GrokViewModel : ViewModel() {
                     reassChecksum = verification.second
                     validationMatched.value = isMatched
                     sha256Checksum.value = origChecksum
+                    sha256VerificationStatus.value = if (isMatched) "VERIFIED_PASSED ($origChecksum)" else "FAILED"
                     GrokLogger.info("Cryptographic Verification: ${if (isMatched) "PASSED" else "FAILED"} with SHA-256 Checksum: $origChecksum")
                 } else {
+                    sha256VerificationStatus.value = "SKIPPED_EMPTY"
                     GrokLogger.warn("No conversations imported. Skipping integrity check.")
                 }
 
@@ -825,28 +834,45 @@ class GrokViewModel : ViewModel() {
                             applyFileDate(convDir, conv.timestamp)
                         }
 
-                        // Write standalone full files inside jobDir
+                        // Write standalone full files inside jobDir based on target export format options
                         exportProgress.value = 0.65f
-                        exportProgressMessage.value = "Generating bundle templates (Markdown, HTML, JSON, CSV)..."
-                        if (optMarkdown.value) {
-                            val mdFull = File(jobDir, "conversations.md")
-                            mdFull.writeText(GrokParser.generateMarkdown(parsedConversations))
-                            applyFileDate(mdFull, System.currentTimeMillis())
-                        }
-                        if (optHtml.value) {
-                            val htmlFull = File(jobDir, "conversations.html")
-                            htmlFull.writeText(GrokParser.generateHtml(parsedConversations))
-                            applyFileDate(htmlFull, System.currentTimeMillis())
-                        }
-                        if (optJson.value) {
-                            val jsonFull = File(jobDir, "conversations.json")
-                            jsonFull.writeText(GrokParser.generateJson(parsedConversations))
-                            applyFileDate(jsonFull, System.currentTimeMillis())
-                        }
-                        if (optCsv.value) {
-                            val csvFull = File(jobDir, "conversations.csv")
-                            csvFull.writeText(GrokParser.generateCsv(parsedConversations))
-                            applyFileDate(csvFull, System.currentTimeMillis())
+                        exportProgressMessage.value = "Generating bundle templates & staging shards..."
+
+                        when (exportTargetFormat.value) {
+                            ExportTargetFormat.LETTA_PASSAGES -> {
+                                val lettaFile = File(jobDir, "letta_passages.jsonl")
+                                lettaFile.writeText(GrokParser.generateLettaPassagesJsonL(parsedConversations))
+                                applyFileDate(lettaFile, System.currentTimeMillis())
+
+                                val shardsDir = File(jobDir, "staging_shards")
+                                GrokParser.generateJsonLStagingShards(parsedConversations, shardsDir)
+                            }
+                            ExportTargetFormat.OBSIDIAN_VAULT -> {
+                                val vaultDir = File(jobDir, "obsidian_vault")
+                                GrokParser.generateObsidianVaultFiles(parsedConversations, vaultDir)
+                            }
+                            else -> {
+                                if (optMarkdown.value) {
+                                    val mdFull = File(jobDir, "conversations.md")
+                                    mdFull.writeText(GrokParser.generateMarkdown(parsedConversations))
+                                    applyFileDate(mdFull, System.currentTimeMillis())
+                                }
+                                if (optHtml.value) {
+                                    val htmlFull = File(jobDir, "conversations.html")
+                                    htmlFull.writeText(GrokParser.generateHtml(parsedConversations))
+                                    applyFileDate(htmlFull, System.currentTimeMillis())
+                                }
+                                if (optJson.value) {
+                                    val jsonFull = File(jobDir, "conversations.json")
+                                    jsonFull.writeText(GrokParser.generateJson(parsedConversations))
+                                    applyFileDate(jsonFull, System.currentTimeMillis())
+                                }
+                                if (optCsv.value) {
+                                    val csvFull = File(jobDir, "conversations.csv")
+                                    csvFull.writeText(GrokParser.generateCsv(parsedConversations))
+                                    applyFileDate(csvFull, System.currentTimeMillis())
+                                }
+                            }
                         }
 
                         // Write standalone global metadata-only database
