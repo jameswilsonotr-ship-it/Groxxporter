@@ -1014,13 +1014,14 @@ object GrokParser {
      */
     fun generateCsv(conversations: List<Conversation>): String {
         val sb = StringBuilder()
-        sb.append("ConversationID,ConversationTitle,Timestamp,Sender,MessageText\n")
+        sb.append("ConversationID,ConversationTitle,Timestamp,Sender,MessageText,ThinkingTrace\n")
         for (conv in conversations) {
             val titleEscaped = conv.title.replace("\"", "\"\"")
             for (msg in conv.messages) {
                 val textEscaped = msg.text.replace("\"", "\"\"")
+                val traceEscaped = (msg.thinkingTrace ?: "").replace("\"", "\"\"")
                 val dateStr = SimpleDateFormat("yyyy-MM-dd HH:mm:ss", Locale.getDefault()).format(Date(msg.timestamp))
-                sb.append("\"${conv.id}\",\"$titleEscaped\",\"$dateStr\",\"${msg.role}\",\"$textEscaped\"\n")
+                sb.append("\"${conv.id}\",\"$titleEscaped\",\"$dateStr\",\"${msg.role}\",\"$textEscaped\",\"$traceEscaped\"\n")
             }
         }
         return sb.toString()

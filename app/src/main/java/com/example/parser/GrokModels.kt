@@ -97,4 +97,101 @@ enum class ExportTargetFormat {
     OBSIDIAN_VAULT
 }
 
+/**
+ * Represents a periodic auto-save checkpoint snapshot for in-flight parsing operations.
+ */
+data class AutoSaveCheckpoint(
+    val id: String,
+    val timestamp: Long,
+    val conversationCount: Int,
+    val messageCount: Int,
+    val totalCharacters: Long,
+    val fileSize: Long,
+    val filePath: String,
+    val jobLabel: String
+)
+
+/**
+ * Represents a single JSON field definition discovered or mapped within a conversational payload.
+ */
+data class SchemaFieldDefinition(
+    val originalKey: String,
+    val mappedKey: String,
+    val dataType: String,
+    val isMandatory: Boolean = false,
+    val isEnabledForExport: Boolean = true,
+    val sampleValue: String = "",
+    val description: String = ""
+)
+
+/**
+ * Versioned schema definition pack containing customized field mappings and extraction toggles.
+ */
+data class SchemaPack(
+    val id: String,
+    val name: String,
+    val version: String,
+    val description: String,
+    val createdAt: Long,
+    val fields: List<SchemaFieldDefinition>,
+    val isSystemPreset: Boolean = false
+)
+
+/**
+ * Diagnostic validation report comparing payload contents against an active SchemaPack.
+ */
+data class SchemaValidationReport(
+    val isValid: Boolean,
+    val matchPercentage: Float,
+    val totalDiscoveredFields: Int,
+    val matchedFieldsCount: Int,
+    val missingMandatoryFields: List<String>,
+    val unknownNewFields: List<String>,
+    val fieldTypeMismatches: List<String>
+)
+
+/**
+ * Inspection telemetry for deep JSON payload attribute analysis.
+ */
+data class SchemaInspectorData(
+    val totalKeysInspected: Int = 0,
+    val stringTypeCount: Int = 0,
+    val numberTypeCount: Int = 0,
+    val objectTypeCount: Int = 0,
+    val arrayTypeCount: Int = 0,
+    val booleanTypeCount: Int = 0,
+    val maxNestingDepth: Int = 1,
+    val nullabilityPercentage: Float = 0f,
+    val samplePayloadPreview: String = "",
+    val fieldHierarchyTree: List<String> = emptyList()
+)
+
+/**
+ * Field difference report between two SchemaPack versions.
+ */
+data class SchemaDiffReport(
+    val versionA: String,
+    val versionB: String,
+    val addedFields: List<SchemaFieldDefinition> = emptyList(),
+    val removedFields: List<SchemaFieldDefinition> = emptyList(),
+    val modifiedMappings: List<Pair<SchemaFieldDefinition, SchemaFieldDefinition>> = emptyList()
+)
+
+/**
+ * Detailed telemetry metrics for visual charts and graphs.
+ */
+data class ExportMetricsData(
+    val userMessageCount: Int = 0,
+    val grokMessageCount: Int = 0,
+    val systemMessageCount: Int = 0,
+    val avgCharsPerMessage: Int = 0,
+    val throughputMessagesPerSec: Float = 0f,
+    val originalPayloadSizeBytes: Long = 0L,
+    val filteredExportSizeBytes: Long = 0L,
+    val payloadCompressionPercentage: Float = 0f,
+    val monthlyDistribution: Map<String, Int> = emptyMap()
+)
+
+
+
 
