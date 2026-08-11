@@ -192,6 +192,30 @@ data class ExportMetricsData(
     val monthlyDistribution: Map<String, Int> = emptyMap()
 )
 
+/**
+ * Supported processing pass types for multi-stage ingestion.
+ */
+enum class PassType {
+    INVENTORY_SCAN,
+    HEAD_TAIL_EXTRACT,
+    DETAILED_SLICE,
+    COMPILATION
+}
+
+/**
+ * Represents a day-level inventory snapshot from a Grok export.
+ */
+data class DayInventory(
+    val date: String,
+    val folderPath: String,
+    val inventoryPath: String,
+    val driveId: String? = null,
+    val driveLink: String? = null,
+    val fileSize: Long = 0,
+    val messageCount: Int = 0,
+    val processed: Boolean = false
+)
+
 
 
 

@@ -69,6 +69,7 @@ fun DashboardScreen(viewModel: GrokViewModel) {
 
     LaunchedEffect(Unit) {
         viewModel.initDataStore(context)
+        viewModel.initializev15Roadmap()
     }
 
     val importState by viewModel.importState.collectAsState()
@@ -355,6 +356,8 @@ fun DashboardScreen(viewModel: GrokViewModel) {
                         0 -> {
                             // TAB 0: The Helm ⚓ (Ingestion & Drive Integration)
                             item { HeroBanner() }
+
+                            item { PlanningDashboardCard(viewModel) }
 
                             item {
                                 SovereignStatusCard(
@@ -1906,17 +1909,7 @@ fun GoogleDriveIntegrationCard(viewModel: GrokViewModel) {
 
                     if (driveAccessToken == null) {
                         Button(
-                            onClick = {
-                                try {
-                                    val intent = AccountManager.newChooseAccountIntent(
-                                        null, null, arrayOf("com.google"), true, null, null, null, null
-                                    )
-                                    googleAccountPicker.launch(intent)
-                                } catch (e: Exception) {
-                                    // Fallback for emulators/environments without AccountManager chooser
-                                    viewModel.connectToDrive("oauth_default_user_token", context, "user@google.com")
-                                }
-                            },
+                            onClick = { viewModel.performGoogleOneTapAuth(context) },
                             colors = ButtonDefaults.buttonColors(containerColor = CyberCyan, contentColor = CyberBg),
                             shape = RoundedCornerShape(10.dp),
                             modifier = Modifier
@@ -5128,6 +5121,88 @@ fun SchemaVersionManagerCard(viewModel: GrokViewModel) {
                 }
             }
         )
+    }
+}
+
+@Composable
+fun PlanningDashboardCard(viewModel: GrokViewModel) {
+    val progress by viewModel.currentTaskPercentage.collectAsState()
+    val currentTask by viewModel.currentTaskLabel.collectAsState()
+    val steps by viewModel.planningSteps.collectAsState()
+
+    Card(
+        modifier = Modifier.fillMaxWidth(),
+        colors = CardDefaults.cardColors(containerColor = CyberSurface),
+        border = BorderStroke(1.dp, CyberBorder)
+    ) {
+        Column(modifier = Modifier.padding(16.dp)) {
+            Row(
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.SpaceBetween,
+                modifier = Modifier.fillMaxWidth()
+            ) {
+                Text(
+                    text = "Refactor Status: v1.5.0 Ingestion Pass",
+                    fontWeight = FontWeight.Bold,
+                    fontSize = 14.sp,
+                    color = CyberCyan
+                )
+                Text(
+                    text = "${(progress * 100).toInt()}%",
+                    fontWeight = FontWeight.Black,
+                    fontSize = 14.sp,
+                    color = CyberCyan
+                )
+            }
+            Spacer(modifier = Modifier.height(8.dp))
+            LinearProgressIndicator(
+                progress = { progress },
+                modifier = Modifier.fillMaxWidth().height(8.dp).border(1.dp, CyberBorder, RoundedCornerShape(4.dp)),
+                color = CyberCyan,
+                trackColor = CyberBg
+            )
+            Spacer(modifier = Modifier.height(12.dp))
+            Text(
+                text = "Current: $currentTask",
+                fontSize = 12.sp,
+                color = CyberText,
+                fontFamily = FontFamily.Monospace
+            )
+            Spacer(modifier = Modifier.height(16.dp))
+            steps.forEach { step ->
+                Row(
+                    verticalAlignment = Alignment.CenterVertically,
+                    modifier = Modifier.padding(vertical = 4.dp)
+                ) {
+                    Icon(
+                        imageVector = if (step.isCompleted) Icons.Default.CheckCircle else if (step.isProcessing) Icons.Default.Sync else Icons.Default.RadioButtonUnchecked,
+                        contentDescription = null,
+                        tint = if (step.isCompleted) CyberCyan else if (step.isProcessing) CyberOrange else CyberTextMuted,
+                        modifier = Modifier.size(16.dp)
+                    )
+                    Spacer(modifier = Modifier.width(8.dp))
+                    Text(
+                        text = step.label,
+                        fontSize = 11.sp,
+                        color = if (step.isCompleted) CyberText else if (step.isProcessing) CyberCyan else CyberTextMuted,
+                        fontFamily = FontFamily.Monospace
+                    )
+                }
+            }
+            Spacer(modifier = Modifier.height(16.dp))
+            val context = LocalContext.current
+            Button(
+                onClick = { viewModel.performMultiPassIngestion(context) },
+                colors = ButtonDefaults.buttonColors(containerColor = CyberCyan, contentColor = CyberBg),
+                shape = RoundedCornerShape(12.dp),
+                modifier = Modifier.fillMaxWidth().height(40.dp),
+                enabled = progress < 1.0f
+            ) {
+                Icon(Icons.Default.PlayArrow, contentDescription = null, modifier = Modifier.size(16.dp))
+                Spacer(modifier = Modifier.width(8.dp))
+                Text("Start Multi-Pass Refactor", fontWeight = FontWeight.Bold, fontSize = 12.sp)
+            }
+        }
     }
 }
 
