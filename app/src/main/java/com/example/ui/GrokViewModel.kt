@@ -277,6 +277,7 @@ class GrokViewModel : ViewModel() {
 
     val isLoadedFileJson = MutableStateFlow(false)
     val lastLoadedUri = MutableStateFlow<Uri?>(null)
+    val isHeadTailIngestionMode = MutableStateFlow(false)
 
     private val _exportState = MutableStateFlow<ExportState>(ExportState.Idle)
     val exportState: StateFlow<ExportState> = _exportState
@@ -671,34 +672,63 @@ class GrokViewModel : ViewModel() {
         }
         viewModelScope.launch(Dispatchers.IO) {
             try {
-                GrokLogger.info("Starting JSON split into first 10MB and last 10MB chunks...")
-                val bytes = context.contentResolver.openInputStream(uri)?.use { it.readBytes() } ?: throw Exception("Failed to read JSON stream")
+                GrokLogger.info("Starting memory-efficient JSON split into first 10MB and last 10MB chunks...")
                 
-                val totalSize = bytes.size
+                val pfd = context.contentResolver.openFileDescriptor(uri, "r") ?: throw Exception("Failed to open file descriptor")
+                val totalSize = pfd.statSize
                 val chunkLimit = 10 * 1024 * 1024 // 10 MB
                 
-                val firstBytes = if (totalSize <= chunkLimit) bytes else bytes.copyOfRange(0, chunkLimit)
-                val lastBytes = if (totalSize <= chunkLimit) bytes else bytes.copyOfRange(totalSize - chunkLimit, totalSize)
-                
                 val exportDir = currentJob.value?.folderPath?.let { File(it) } ?: File(context.filesDir, "grok_exports").apply { mkdirs() }
+                val firstJsonFile = File(exportDir, "chunk_head_10mb.json")
+                val lastJsonFile = File(exportDir, "chunk_tail_10mb.json")
                 
-                val firstJsonFile = File(exportDir, "chunk_first_10mb.json")
-                val lastJsonFile = File(exportDir, "chunk_last_10mb.json")
-                val firstBookMd = File(exportDir, "chunk_first_10mb_book.md")
-                val lastBookMd = File(exportDir, "chunk_last_10mb_book.md")
+                // Extract Head
+                FileInputStream(pfd.fileDescriptor).use { input ->
+                    val headBytes = ByteArray(if (totalSize < chunkLimit) totalSize.toInt() else chunkLimit)
+                    var read = 0
+                    while (read < headBytes.size) {
+                        val r = input.read(headBytes, read, headBytes.size - read)
+                        if (r == -1) break
+                        read += r
+                    }
+                    firstJsonFile.writeBytes(headBytes)
+                }
                 
-                firstJsonFile.writeBytes(firstBytes)
-                lastJsonFile.writeBytes(lastBytes)
+                // Extract Tail
+                if (totalSize > chunkLimit) {
+                    FileInputStream(pfd.fileDescriptor).use { input ->
+                        input.channel.position(totalSize - chunkLimit)
+                        val tailBytes = ByteArray(chunkLimit)
+                        var read = 0
+                        while (read < tailBytes.size) {
+                            val r = input.read(tailBytes, read, tailBytes.size - read)
+                            if (r == -1) break
+                            read += r
+                        }
+                        lastJsonFile.writeBytes(tailBytes)
+                    }
+                } else {
+                    // Just copy head to tail if file is smaller than limit
+                    firstJsonFile.copyTo(lastJsonFile, overwrite = true)
+                }
                 
-                firstBookMd.writeText("# Grok Archive - First 10MB Book Transcript\n\n```json\n" + String(firstBytes, Charsets.UTF_8).take(50000) + "\n...\n```")
-                lastBookMd.writeText("# Grok Archive - Last 10MB Book Transcript\n\n```json\n" + String(lastBytes, Charsets.UTF_8).take(50000) + "\n...\n```")
+                pfd.close()
+                
+                val firstBookMd = File(exportDir, "chunk_head_10mb_book.md")
+                val lastBookMd = File(exportDir, "chunk_tail_10mb_book.md")
+                
+                val headPreview = if (firstJsonFile.length() > 50000) String(firstJsonFile.readBytes().take(50000).toByteArray()) else firstJsonFile.readText()
+                val tailPreview = if (lastJsonFile.length() > 50000) String(lastJsonFile.readBytes().take(50000).toByteArray()) else lastJsonFile.readText()
+
+                firstBookMd.writeText("# Grok Archive - HEAD 10MB Transcript\n\n```json\n$headPreview\n...\n```")
+                lastBookMd.writeText("# Grok Archive - TAIL 10MB Transcript\n\n```json\n...\n$tailPreview\n```")
                 
                 val authority = "${context.packageName}.fileprovider"
                 val fileUri = androidx.core.content.FileProvider.getUriForFile(context, authority, firstJsonFile)
-                GrokLogger.info("JSON successfully split into first and last 10MB JSON and book chunks at: ${exportDir.absolutePath}")
-                _exportState.value = ExportState.Success(fileUri, firstJsonFile.absolutePath, ExportStats(fileCount = 4, totalSizeBytes = totalSize.toLong()))
+                GrokLogger.info("JSON successfully split into HEAD/TAIL chunks at: ${exportDir.absolutePath}")
+                _exportState.value = ExportState.Success(fileUri, firstJsonFile.absolutePath, ExportStats(fileCount = 4, totalSizeBytes = totalSize))
             } catch (e: Exception) {
-                GrokLogger.error("Error splitting JSON archive", e)
+                GrokLogger.error("Error during high-capacity JSON split", e)
                 _exportState.value = ExportState.Error("Split error: ${e.localizedMessage}")
             }
         }

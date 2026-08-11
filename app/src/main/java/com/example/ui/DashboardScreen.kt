@@ -685,6 +685,30 @@ fun ImportLauncherCard(
             )
             Spacer(modifier = Modifier.height(16.dp))
 
+            val headTailIngestionMode by viewModel.isHeadTailIngestionMode.collectAsState()
+            Row(
+                verticalAlignment = Alignment.CenterVertically,
+                modifier = Modifier.fillMaxWidth(0.9f)
+            ) {
+                Text(
+                    text = "10MB Head/Tail Ingestion Mode",
+                    color = CyberText,
+                    fontSize = 12.sp,
+                    modifier = Modifier.weight(1f)
+                )
+                Switch(
+                    checked = headTailIngestionMode,
+                    onCheckedChange = { viewModel.isHeadTailIngestionMode.value = it },
+                    colors = SwitchDefaults.colors(
+                        checkedThumbColor = CyberCyan,
+                        checkedTrackColor = CyberCyan.copy(alpha = 0.5f)
+                    ),
+                    modifier = Modifier.scale(0.8f)
+                )
+            }
+
+            Spacer(modifier = Modifier.height(8.dp))
+
             if (importState is ImportState.Success && isJsonLoaded) {
                 Row(
                     modifier = Modifier.fillMaxWidth(0.9f),

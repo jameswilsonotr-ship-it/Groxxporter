@@ -124,7 +124,7 @@ object GrokLogger {
 
         val header = """
             ===================================================================
-            PROJECT IRON PEARL - DEEP DIAGNOSTIC & FORENSIC DUMP
+            GROXXPORTER - PRODUCTION DIAGNOSTIC & FORENSIC DUMP
             Generated: ${Date()}
             ===================================================================
             [SYSTEM TELEMETRY]
