@@ -1,11 +1,12 @@
 package com.example.parser
 
 import android.content.Context
+import android.net.Uri
 import android.util.JsonReader
 import android.util.JsonWriter
-import java.io.File
-import java.io.FileReader
-import java.io.FileWriter
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.withContext
+import java.io.*
 import java.text.SimpleDateFormat
 import java.util.*
 
@@ -101,6 +102,98 @@ object GrokJobManager {
         val root = getJobsRoot(context)
         root.deleteRecursively()
         root.mkdirs()
+    }
+
+    /**
+     * Non-blocking 10MB head/tail JSON array splitter.
+     * Efficiently extracts the first and last 10MB of a large JSON file for rapid triage.
+     */
+    suspend fun splitJsonFile(
+        context: Context,
+        sourceUri: Uri,
+        jobDir: File,
+        baseName: String
+    ): Pair<File, File> = withContext(Dispatchers.IO) {
+        val pfd = try {
+            context.contentResolver.openFileDescriptor(sourceUri, "r")
+        } catch (e: Exception) {
+            null
+        } ?: throw Exception("Failed to open file descriptor for $sourceUri")
+        
+        val totalSize = pfd.statSize
+        val chunkLimit = 10 * 1024 * 1024L // 10 MB
+
+        val headFile = File(jobDir, "${baseName}_head_10mb.json")
+        val tailFile = File(jobDir, "${baseName}_tail_10mb.json")
+
+        // Head Extraction
+        FileInputStream(pfd.fileDescriptor).use { input ->
+            val sizeToRead = if (totalSize < chunkLimit) totalSize.toInt() else chunkLimit.toInt()
+            val headBytes = ByteArray(sizeToRead)
+            var read = 0
+            while (read < sizeToRead) {
+                val r = input.read(headBytes, read, sizeToRead - read)
+                if (r == -1) break
+                read += r
+            }
+            headFile.writeBytes(headBytes)
+        }
+
+        // Tail Extraction
+        if (totalSize > chunkLimit) {
+            FileInputStream(pfd.fileDescriptor).use { input ->
+                try {
+                    input.channel.position(totalSize - chunkLimit)
+                    val tailBytes = ByteArray(chunkLimit.toInt())
+                    var read = 0
+                    while (read < tailBytes.size) {
+                        val r = input.read(tailBytes, read, tailBytes.size - read)
+                        if (r == -1) break
+                        read += r
+                    }
+                    tailFile.writeBytes(tailBytes)
+                } catch (e: Exception) {
+                    // Fallback if seek fails
+                    headFile.copyTo(tailFile, overwrite = true)
+                }
+            }
+        } else {
+            // Just copy head to tail if file is smaller than limit
+            headFile.copyTo(tailFile, overwrite = true)
+        }
+
+        pfd.close()
+        Pair(headFile, tailFile)
+    }
+
+    /**
+     * Processes a list of daily inventory files using the non-blocking splitter.
+     */
+    suspend fun processInventoryPass(
+        context: Context,
+        inventories: List<DayInventory>,
+        jobDir: File,
+        onProgress: (Int, Int) -> Unit
+    ) = withContext(Dispatchers.IO) {
+        inventories.forEachIndexed { index, inventory ->
+            try {
+                // Determine source Uri
+                val sourceUri = if (inventory.inventoryPath.startsWith("content://") || inventory.inventoryPath.startsWith("file://")) {
+                    Uri.parse(inventory.inventoryPath)
+                } else {
+                    // Assume relative path in filesDir for mocks
+                    val file = File(context.filesDir, inventory.inventoryPath)
+                    if (file.exists()) Uri.fromFile(file) else null
+                }
+
+                if (sourceUri != null) {
+                    splitJsonFile(context, sourceUri, jobDir, "inventory_${inventory.date}")
+                }
+            } catch (e: Exception) {
+                e.printStackTrace()
+            }
+            onProgress(index + 1, inventories.size)
+        }
     }
 
     private fun writeJobInfo(file: File, job: GrokJob) {

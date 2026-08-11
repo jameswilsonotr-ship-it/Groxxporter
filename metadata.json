@@ -1,6 +1,6 @@
 {
   "name": "Groxxporter",
-  "description": "Locally parse, filter, and extract xAI Grok data export archives into Markdown, HTML, CSV, JSON, and decoded binaries.",
+  "description": "Enterprise-grade xAI Grok Sovereign Export & Ingestion Engine. High-fidelity archival with PII scrubbing, JSON sharding, and on-device Gemini verification.",
   "requestFramePermissions": [],
   "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
 }

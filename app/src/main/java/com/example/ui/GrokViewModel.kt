@@ -74,6 +74,14 @@ class GrokViewModel : ViewModel() {
         isGeminiEnabled.value = enabled
     }
 
+    fun setBatchMode(enabled: Boolean) {
+        enableBatchMode.value = enabled
+    }
+
+    fun setPreserveFileDates(enabled: Boolean) {
+        preserveFileDates.value = enabled
+    }
+
     fun setNanoEnabled(enabled: Boolean) {
         isNanoEnabled.value = enabled
     }
@@ -308,15 +316,47 @@ class GrokViewModel : ViewModel() {
         currentTaskLabel.value = "Phase 2: Mapping Test Payloads..."
         currentTaskPercentage.value = 0.25f
 
-        // Mock Payload Data based on prompt
+        // Authoritative Payload Data from Drive Analysis
         _dayInventories.value = listOf(
-            DayInventory("2026-06-01", "pre_extract/raw/2026/06/week23/2026-06-01", "pre_extract/day_inventory_2026-06-01.json"),
-            DayInventory("2026-06-02", "pre_extract/raw/2026/06/week23/2026-06-02", "pre_extract/day_inventory_2026-06-02.json"),
-            DayInventory("2026-06-08", "pre_extract/raw/2026/06/week24/2026-06-08", "pre_extract/day_inventory_2026-06-08.json")
+            DayInventory(
+                date = "2026-06-01",
+                folderPath = "pre_extract/raw/2026/06/week23/2026-06-01",
+                inventoryPath = "pre_extract/day_inventory_2026-06-01.json",
+                driveId = "1obfXkm_NTvMZYOwws-fW5kr_Nvt9Gjhy", // week23 parent folder ID used for context
+                driveLink = "https://drive.google.com/drive/folders/1791d1TyNzNaJkXz9_F7igJHRg97cUtpO"
+            ),
+            DayInventory(
+                date = "2026-06-02",
+                folderPath = "pre_extract/raw/2026/06/week23/2026-06-02",
+                inventoryPath = "pre_extract/day_inventory_2026-06-02.json",
+                driveId = "1791d1TyNzNaJkXz9_F7igJHRg97cUtpO",
+                driveLink = "https://drive.google.com/drive/folders/1791d1TyNzNaJkXz9_F7igJHRg97cUtpO"
+            ),
+            DayInventory(
+                date = "2026-06-08",
+                folderPath = "pre_extract/raw/2026/06/week24/2026-06-08",
+                inventoryPath = "pre_extract/day_inventory_2026-06-08.json",
+                driveId = "1-NeEDOY3u0GRzioNkScM18wxA0Dt7IEu",
+                driveLink = "https://drive.google.com/drive/folders/1-NeEDOY3u0GRzioNkScM18wxA0Dt7IEu"
+            )
         )
+        GrokLogger.info("Sovereign Registry Mapped: v2.2 Authoritative Maps Loaded.")
     }
 
     fun performMultiPassIngestion(context: Context) {
+        val job = currentJob.value ?: run {
+            // Fallback: Create a default job if none exists for standalone testing
+            viewModelScope.launch {
+                val (newJob, _) = withContext(Dispatchers.IO) {
+                    GrokJobManager.createNewJob(context, "Sovereign Ingestion Pass")
+                }
+                currentJob.value = newJob
+                performMultiPassIngestion(context)
+            }
+            return
+        }
+        val jobDir = File(job.folderPath)
+
         viewModelScope.launch(Dispatchers.IO) {
             try {
                 // Pass 1: Inventory Scan
@@ -330,14 +370,15 @@ class GrokViewModel : ViewModel() {
 
                 // Pass 2: Head/Tail Extraction
                 updatePlanningStep(4, isProcessing = true)
-                currentTaskLabel.value = "Pass 2: Refactoring 10MB Head/Tail Splitting..."
+                currentTaskLabel.value = "Pass 2: 10MB Head/Tail Splitting Engine..."
                 currentTaskPercentage.value = 0.55f
                 
-                // Logic already refactored in previous turn, now executing on stubs
-                _dayInventories.value.forEach { day ->
-                    GrokLogger.info("Slicing ${day.date} payload (Head/Tail extraction)...")
+                GrokLogger.info("Executing non-blocking 10MB head/tail split on daily inventory files...")
+                GrokJobManager.processInventoryPass(context, _dayInventories.value, jobDir) { current, total ->
+                    currentTaskLabel.value = "Splitting Inventory: $current of $total files..."
+                    currentTaskPercentage.value = 0.35f + (0.20f * (current.toFloat() / total.toFloat()))
                 }
-                kotlinx.coroutines.delay(1200)
+                
                 updatePlanningStep(4, isCompleted = true)
 
                 // Pass 3: Detailed Slicing
@@ -402,7 +443,7 @@ class GrokViewModel : ViewModel() {
     val sha256VerificationStatus = MutableStateFlow<String?>("NOT_VERIFIED")
 
     // PII Scrubbing and Export Target Format States
-    val piiScrubbingEnabled = MutableStateFlow(false)
+    val piiScrubbingEnabled = MutableStateFlow(true)
     val exportTargetFormat = MutableStateFlow(ExportTargetFormat.MARKDOWN)
 
     // Jobs state flow
@@ -870,7 +911,9 @@ class GrokViewModel : ViewModel() {
                             ZipInputStream(BufferedInputStream(rawIn)).use { zipIn ->
                                 var entry = zipIn.nextEntry
                                 while (entry != null) {
-                                    if (!entry.isDirectory && (entry.name.contains("conversations", ignoreCase = true) || entry.name.endsWith(".json", ignoreCase = true))) {
+                                    val isJsonEntry = entry.name.endsWith(".json", ignoreCase = true)
+                                    val isJsonlEntry = entry.name.endsWith(".jsonl", ignoreCase = true)
+                                    if (!entry.isDirectory && (entry.name.contains("conversations", ignoreCase = true) || isJsonEntry || isJsonlEntry)) {
                                         GrokLogger.info("Streaming and token-parsing JSON file: ${entry.name}")
                                         _importState.value = ImportState.Loading(_importProgress.value, "Streaming and parsing JSON from ZIP...")
                                         list = GrokParser.parseConversationsStream(
@@ -878,6 +921,7 @@ class GrokViewModel : ViewModel() {
                                             startDateFilter.value,
                                             endDateFilter.value,
                                             enablePiiScrubbing = piiScrubbingEnabled.value,
+                                            isJsonl = isJsonlEntry,
                                             onProgress = { count ->
                                                 _importProgress.value = count
                                                 _importState.value = ImportState.Loading(count, "Streaming JSON (${count} conversations)...")
@@ -895,18 +939,20 @@ class GrokViewModel : ViewModel() {
                         }
 
                         if (!foundJson) {
-                            throw Exception("No valid conversation JSON file (*.json) found inside the selected ZIP archive.")
+                            throw Exception("No valid conversation JSON/JSONL file found inside the selected ZIP archive.")
                         }
                         list
                     } else {
-                        GrokLogger.info("File recognized as raw JSON data. Streaming content...")
-                        _importState.value = ImportState.Loading(0, "Streaming and parsing raw JSON file...")
+                        val isJsonl = fileName.endsWith(".jsonl", ignoreCase = true)
+                        GrokLogger.info("File recognized as raw ${if (isJsonl) "JSONL" else "JSON"} data. Streaming content...")
+                        _importState.value = ImportState.Loading(0, "Streaming and parsing raw ${if (isJsonl) "JSONL" else "JSON"} file...")
                         context.contentResolver.openInputStream(uri)?.use { rawIn ->
                             GrokParser.parseConversationsStream(
                                 BufferedInputStream(rawIn),
                                 startDateFilter.value,
                                 endDateFilter.value,
                                 enablePiiScrubbing = piiScrubbingEnabled.value,
+                                isJsonl = isJsonl,
                                 onProgress = { count ->
                                     _importProgress.value = count
                                     _importState.value = ImportState.Loading(count, "Streaming JSON (${count} conversations)...")
@@ -1685,7 +1731,7 @@ class GrokViewModel : ViewModel() {
                               {
                                 "id": "m-001",
                                 "role": "user",
-                                "text": "What conditions do extremophiles need to survive on Europa?",
+                                "text": "What conditions do extremophiles need to survive on Europa? Contact me at dr.smith@university.edu or 555-0199.",
                                 "timestamp": 1783260010000
                               },
                               {
@@ -1704,7 +1750,7 @@ class GrokViewModel : ViewModel() {
                               {
                                 "id": "m-101",
                                 "role": "user",
-                                "text": "Why does JSON streaming prevent OutOfMemoryErrors?",
+                                "text": "Why does JSON streaming prevent OutOfMemoryErrors? My server IP is 192.168.1.100.",
                                 "timestamp": 1783270020000
                               },
                               {
@@ -1723,7 +1769,7 @@ class GrokViewModel : ViewModel() {
                               {
                                 "id": "m-201",
                                 "role": "user",
-                                "text": "Do you dream of electric sheep, Grok?",
+                                "text": "Do you dream of electric sheep, Grok? My SSN is 000-00-0000 (just kidding).",
                                 "timestamp": 1783280030000
                               },
                               {

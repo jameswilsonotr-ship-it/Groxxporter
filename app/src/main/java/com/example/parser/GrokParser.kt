@@ -467,12 +467,13 @@ object GrokParser {
 
     /**
      * Low-memory streaming parser for conversation exports (supporting flat arrays, root object containers,
-     * and single conversation JSON Blobs).
+     * JSONL sharded line-delimited objects, and single conversation JSON Blobs).
      *
      * @param inputStream InputStream for the JSON content.
      * @param startDate Optional epoch timestamp lower bound filter.
      * @param endDate Optional epoch timestamp upper bound filter.
      * @param enablePiiScrubbing Flag to enable automated PII scrubbing.
+     * @param isJsonl Force JSONL (line-delimited) parsing mode.
      * @param onProgress Callback invoked periodically with parsed conversation count.
      * @param onStatsUpdate Callback invoked periodically with updated extraction statistics.
      * @return List of parsed [Conversation] objects.
@@ -482,13 +483,19 @@ object GrokParser {
         startDate: Long?,
         endDate: Long?,
         enablePiiScrubbing: Boolean = false,
+        isJsonl: Boolean = false,
         onProgress: (Int) -> Unit,
         onStatsUpdate: (ExtractionStats) -> Unit
     ): List<Conversation> {
         val list = mutableListOf<Conversation>()
         val stats = ExtractionStats()
         
-        GrokLogger.info("Opening raw JSON input stream (PII Scrubbing: $enablePiiScrubbing)...")
+        GrokLogger.info("Opening raw JSON input stream (PII Scrubbing: $enablePiiScrubbing, JSONL: $isJsonl)...")
+        
+        if (isJsonl) {
+            return parseJsonlStream(inputStream, startDate, endDate, enablePiiScrubbing, onProgress, onStatsUpdate)
+        }
+
         val reader = JsonReader(InputStreamReader(inputStream, "UTF-8"))
 
         try {
@@ -664,6 +671,59 @@ object GrokParser {
             } catch (e: Exception) {}
         }
 
+        onStatsUpdate(stats)
+        return list
+    }
+
+    /**
+     * Parses a line-delimited JSON (JSONL) stream where each line is a valid Conversation object.
+     */
+    private fun parseJsonlStream(
+        inputStream: InputStream,
+        startDate: Long?,
+        endDate: Long?,
+        enablePiiScrubbing: Boolean,
+        onProgress: (Int) -> Unit,
+        onStatsUpdate: (ExtractionStats) -> Unit
+    ): List<Conversation> {
+        val list = mutableListOf<Conversation>()
+        val stats = ExtractionStats()
+        val reader = BufferedReader(InputStreamReader(inputStream, "UTF-8"))
+        var count = 0
+        
+        try {
+            var line = reader.readLine()
+            while (line != null) {
+                if (line.trim().isNotEmpty()) {
+                    val lineStream = ByteArrayInputStream(line.toByteArray(Charsets.UTF_8))
+                    val jsonReader = JsonReader(InputStreamReader(lineStream, "UTF-8"))
+                    val conv = parseSingleConversation(jsonReader, enablePiiScrubbing)
+                    if (conv != null) {
+                        stats.totalConversations++
+                        val matchesDate = (startDate == null || conv.timestamp >= startDate) &&
+                                          (endDate == null || conv.timestamp <= endDate)
+                        if (matchesDate) {
+                            list.add(conv)
+                            stats.filteredConversations++
+                            stats.totalUserMessages += conv.messages.count { it.role.lowercase() == "user" }
+                            stats.totalGrokMessages += conv.messages.count { it.role.lowercase() in listOf("grok", "assistant") }
+                            stats.totalCharacters += conv.messages.sumOf { it.text.length.toLong() }
+                            if (conv.timestamp < stats.dateMin) stats.dateMin = conv.timestamp
+                            if (conv.timestamp > stats.dateMax) stats.dateMax = conv.timestamp
+                        }
+                    }
+                    count++
+                    if (count % 10 == 0) {
+                        onProgress(count)
+                        onStatsUpdate(stats.copy())
+                    }
+                }
+                line = reader.readLine()
+            }
+        } catch (e: Exception) {
+            GrokLogger.error("Error parsing JSONL stream", e)
+        }
+        
         onStatsUpdate(stats)
         return list
     }

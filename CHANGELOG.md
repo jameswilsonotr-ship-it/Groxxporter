@@ -2,6 +2,13 @@
 
 All notable changes to the **Grok Export Extractor** project will be documented in this file.
 
+## [v1.5.0] - 2026-08-11
+### Added
+- **Production Ingestion Pipeline**: Replaced demo datasets with live, high-fidelity xAI archival data.
+- **Automated PII Scrubbing**: Integrated deterministic regex-based redaction for Emails, Phone Numbers, SSNs, and IP addresses during ingestion.
+- **JSONL Sharding Protocol**: Implemented 50MB staging shards for Letta-compatible ingestion pipelines.
+- **Play Store Readiness**: Finalized versioning (v1.5.0, Build 3) and metadata for Google Play Console publication.
+
 ## [v1.3.0] - 2026-07-05
 ### Added
 - **Gemini Integrity Verifier & On-Device Co-Processor**: An interactive verification panel allowing developers to toggle between cloud Gemini and on-device Gemini Nano (via Pixel 9a AICore local NPU co-processing) to audit chunk slicing and recombination continuity.

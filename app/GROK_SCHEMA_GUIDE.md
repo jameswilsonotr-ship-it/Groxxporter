@@ -1,4 +1,4 @@
-# Grok / xAI Sovereign Export Schema Guide (v1.4.0)
+# Grok / xAI Sovereign Export Schema Guide (v1.5.0)
 
 This guide documents the evolving JSON schema for xAI Grok exports as of August 2026, and how the Groxxporter engine resolves dynamic keys.
 

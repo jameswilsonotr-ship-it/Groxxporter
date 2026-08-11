@@ -48,6 +48,7 @@ import com.example.parser.ExtractionStats
 import com.example.parser.GrokJob
 import com.example.parser.GrokJobManager
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import java.io.File
 import java.text.SimpleDateFormat
@@ -271,62 +272,134 @@ fun DashboardScreen(viewModel: GrokViewModel) {
         )
     }
 
-    Scaffold(
-        modifier = Modifier.fillMaxSize(),
-        topBar = {
-            TopAppBar(
-                title = {
-                    Row(verticalAlignment = Alignment.CenterVertically) {
-                        Icon(
-                            imageVector = Icons.Default.FolderZip,
-                            contentDescription = null,
-                            tint = CyberCyan,
-                            modifier = Modifier.size(28.dp)
-                        )
-                        Spacer(modifier = Modifier.width(8.dp))
-                        Text(
-                            text = "Grok Export Extractor",
-                            fontWeight = FontWeight.Bold,
-                            color = CyberText,
-                            fontSize = 20.sp
-                        )
-                    }
-                },
-                colors = TopAppBarDefaults.topAppBarColors(
-                    containerColor = CyberBg,
-                    titleContentColor = CyberText
-                ),
-                actions = {
-                    IconButton(onClick = { showHelpDialog = true }) {
-                        Icon(Icons.Default.Help, contentDescription = "Help Guide", tint = CyberCyan)
-                    }
-                    if (importState is ImportState.Success) {
-                        IconButton(onClick = { viewModel.resetState() }) {
-                            Icon(Icons.Default.Refresh, contentDescription = "Reset", tint = CyberCyan)
+    val drawerState = rememberDrawerState(initialValue = DrawerValue.Closed)
+    val scope = rememberCoroutineScope()
+
+    ModalNavigationDrawer(
+        drawerState = drawerState,
+        drawerContent = {
+            ModalDrawerSheet(
+                drawerContainerColor = CyberSurface,
+                drawerShape = RoundedCornerShape(topEnd = 16.dp, bottomEnd = 16.dp)
+            ) {
+                Column(
+                    modifier = Modifier
+                        .fillMaxHeight()
+                        .width(300.dp)
+                        .padding(24.dp)
+                ) {
+                    Text(
+                        text = "Groxxporter Settings",
+                        style = MaterialTheme.typography.headlineSmall,
+                        color = CyberCyan,
+                        fontWeight = FontWeight.Bold
+                    )
+                    Spacer(modifier = Modifier.height(8.dp))
+                    Text(
+                        text = "Global System Presets",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = CyberTextMuted
+                    )
+                    
+                    HorizontalDivider(modifier = Modifier.padding(vertical = 16.dp), color = CyberBorder)
+
+                    val isBatchEnabled by viewModel.enableBatchMode.collectAsState()
+                    val isGeminiEnabled by viewModel.isGeminiEnabled.collectAsState()
+                    val preserveDates by viewModel.preserveFileDates.collectAsState()
+
+                    CheckboxRow(
+                        label = "Enable 10MB Head/Tail Mode",
+                        checked = isBatchEnabled,
+                        onCheckedChange = { viewModel.setBatchMode(it) }
+                    )
+                    
+                    CheckboxRow(
+                        label = "Gemini AI Verification",
+                        checked = isGeminiEnabled,
+                        onCheckedChange = { viewModel.setGeminiEnabled(it) }
+                    )
+
+                    CheckboxRow(
+                        label = "Preserve File Dates",
+                        checked = preserveDates,
+                        onCheckedChange = { viewModel.setPreserveFileDates(it) }
+                    )
+
+                    Spacer(modifier = Modifier.weight(1f))
+                    
+                    Text(
+                        text = "v1.5.0 Sovereign Build",
+                        color = CyberTextMuted,
+                        fontSize = 10.sp,
+                        textAlign = TextAlign.Center,
+                        modifier = Modifier.fillMaxWidth()
+                    )
+                }
+            }
+        }
+    ) {
+        Scaffold(
+            modifier = Modifier.fillMaxSize(),
+            topBar = {
+                TopAppBar(
+                    navigationIcon = {
+                        IconButton(onClick = { scope.launch { drawerState.open() } }) {
+                            Icon(Icons.Default.Menu, contentDescription = "Settings Hub", tint = CyberCyan)
+                        }
+                    },
+                    title = {
+                        Row(verticalAlignment = Alignment.CenterVertically) {
+                            Icon(
+                                imageVector = Icons.Default.FolderZip,
+                                contentDescription = null,
+                                tint = CyberCyan,
+                                modifier = Modifier.size(28.dp)
+                            )
+                            Spacer(modifier = Modifier.width(8.dp))
+                            Text(
+                                text = "Groxxporter",
+                                fontWeight = FontWeight.Bold,
+                                color = CyberText,
+                                fontSize = 20.sp
+                            )
+                        }
+                    },
+                    colors = TopAppBarDefaults.topAppBarColors(
+                        containerColor = CyberBg,
+                        titleContentColor = CyberText
+                    ),
+                    actions = {
+                        if (importState is ImportState.Success) {
+                            IconButton(onClick = { viewModel.resetState() }) {
+                                Icon(Icons.Default.Refresh, contentDescription = "Clear Session", tint = CyberCyan)
+                            }
+                        } else {
+                            IconButton(onClick = { showHelpDialog = true }) {
+                                Icon(Icons.Default.Help, contentDescription = "Help Guide", tint = CyberCyan)
+                            }
                         }
                     }
-                }
-            )
-        }
-    ) { paddingValues ->
-        Box(
-            modifier = Modifier
-                .fillMaxSize()
-                .background(CyberBg)
-                .padding(paddingValues)
-        ) {
-            Column(modifier = Modifier.fillMaxSize()) {
-                TabRow(
-                    selectedTabIndex = activeTab,
-                    containerColor = CyberSurface,
-                    contentColor = CyberCyan,
-                    divider = { HorizontalDivider(color = CyberBorder) }
-                ) {
-                    val tabs = listOf(
-                        "The Helm ⚓",
-                        "The Vault 🏴‍☠️",
-                        "Engine Room 🛰️"
-                    )
+                )
+            }
+        ) { paddingValues ->
+            Box(
+                modifier = Modifier
+                    .fillMaxSize()
+                    .background(CyberBg)
+                    .padding(paddingValues)
+            ) {
+                Column(modifier = Modifier.fillMaxSize()) {
+                    TabRow(
+                        selectedTabIndex = activeTab,
+                        containerColor = CyberSurface,
+                        contentColor = CyberCyan,
+                        divider = { HorizontalDivider(color = CyberBorder) }
+                    ) {
+                        val tabs = listOf(
+                            "The Helm ⚓",
+                            "Discovery 🏴‍☠️",
+                            "Execution 🛰️"
+                        )
                     tabs.forEachIndexed { index, title ->
                         Tab(
                             selected = activeTab == index,
@@ -382,32 +455,10 @@ fun DashboardScreen(viewModel: GrokViewModel) {
                             item {
                                 GoogleDriveIntegrationCard(viewModel = viewModel)
                             }
-
-                            item {
-                                StepByStepPreviewCard(viewModel = viewModel)
-                            }
-
-                            item {
-                                ProcessingJobsHistoryCard(
-                                    jobs = jobs,
-                                    onViewLogs = { viewingJobLogs = it },
-                                    onViewReports = { viewingJobReports = it },
-                                    onShareZip = { job ->
-                                        val zipFile = File(job.folderPath, "grok_processed_export.zip")
-                                        if (zipFile.exists()) {
-                                            val authority = "${context.packageName}.fileprovider"
-                                            val fileUri = androidx.core.content.FileProvider.getUriForFile(context, authority, zipFile)
-                                            shareExportedFile(context, fileUri)
-                                        }
-                                    },
-                                    onDeleteJob = { viewModel.deleteJob(context, it) },
-                                    onClearAll = { viewModel.clearAllJobs(context) }
-                                )
-                            }
                         }
 
                         1 -> {
-                            // TAB 1: The Vault 🏴‍☠️ (Conversation Browser & Deep Search)
+                            // TAB 1: Discovery 🏴‍☠️ (Conversation Browser, Deep Search & Schema)
                             val parsedConversations = (importState as? ImportState.Success)?.conversations ?: emptyList()
                             val totalChats = if (parsedConversations.isNotEmpty()) parsedConversations.size else stats.totalConversations
                             val totalMsgs = if (parsedConversations.isNotEmpty()) parsedConversations.sumOf { it.messages.size } else (stats.totalUserMessages + stats.totalGrokMessages)
@@ -452,17 +503,6 @@ fun DashboardScreen(viewModel: GrokViewModel) {
                                 )
                             }
 
-                            val filteredChats = parsedConversations.filter { chat ->
-                                searchQuery.isBlank() ||
-                                chat.title.contains(searchQuery, ignoreCase = true) ||
-                                chat.id.contains(searchQuery, ignoreCase = true) ||
-                                chat.messages.any { m ->
-                                    m.text.contains(searchQuery, ignoreCase = true) ||
-                                    (m.thinkingTrace?.contains(searchQuery, ignoreCase = true) == true) ||
-                                    (m.metadataJson?.contains(searchQuery, ignoreCase = true) == true)
-                                }
-                            }
-
                             if (parsedConversations.isEmpty()) {
                                 item {
                                     Card(
@@ -481,7 +521,7 @@ fun DashboardScreen(viewModel: GrokViewModel) {
                                         ) {
                                             Icon(Icons.Default.FolderOpen, contentDescription = null, tint = CyberCyan, modifier = Modifier.size(48.dp))
                                             Spacer(modifier = Modifier.height(12.dp))
-                                            Text("The Vault is Empty", fontWeight = FontWeight.Bold, color = CyberText, fontSize = 16.sp)
+                                            Text("Discovery Vault is Empty", fontWeight = FontWeight.Bold, color = CyberText, fontSize = 16.sp)
                                             Spacer(modifier = Modifier.height(6.dp))
                                             Text(
                                                 "No parsed conversations currently loaded in memory. Visit 'The Helm ⚓' tab to load a local or Drive export file.",
@@ -489,48 +529,119 @@ fun DashboardScreen(viewModel: GrokViewModel) {
                                                 fontSize = 12.sp,
                                                 textAlign = TextAlign.Center
                                             )
-                                            Spacer(modifier = Modifier.height(16.dp))
-                                            Button(
-                                                onClick = { activeTab = 0 },
-                                                colors = ButtonDefaults.buttonColors(containerColor = CyberCyan, contentColor = CyberBg),
-                                                shape = RoundedCornerShape(12.dp)
-                                            ) {
-                                                Text("Go to The Helm ⚓", fontWeight = FontWeight.Bold)
+                                        }
+                                    }
+                                }
+                            } else {
+                                val filteredChats = parsedConversations.filter { chat ->
+                                    searchQuery.isBlank() ||
+                                    chat.title.contains(searchQuery, ignoreCase = true) ||
+                                    chat.id.contains(searchQuery, ignoreCase = true) ||
+                                    chat.messages.any { m ->
+                                        m.text.contains(searchQuery, ignoreCase = true) ||
+                                        (m.thinkingTrace?.contains(searchQuery, ignoreCase = true) == true) ||
+                                        (m.metadataJson?.contains(searchQuery, ignoreCase = true) == true)
+                                    }
+                                }
+
+                                if (filteredChats.isEmpty()) {
+                                    item {
+                                        Box(
+                                            modifier = Modifier
+                                                .fillMaxWidth()
+                                                .padding(32.dp),
+                                            contentAlignment = Alignment.Center
+                                        ) {
+                                            Text("No chats matching '$searchQuery'.", color = CyberTextMuted, fontSize = 13.sp)
+                                        }
+                                    }
+                                } else {
+                                    items(filteredChats) { chat ->
+                                        ChatPreviewItemCard(
+                                            conversation = chat,
+                                            isExpanded = selectedPreviewChat?.id == chat.id,
+                                            searchQuery = searchQuery,
+                                            onClick = {
+                                                selectedPreviewChat = if (selectedPreviewChat?.id == chat.id) null else chat
+                                            }
+                                        )
+                                    }
+                                }
+                            }
+                            
+                            item { JsonSchemaExplorerAndPackCard(viewModel = viewModel) }
+                            item { SchemaInspectorCard(viewModel = viewModel) }
+                        }
+
+                        2 -> {
+                            // TAB 2: Execution 🛰️ (Processing, Export, Logs)
+                            item {
+                                Card(
+                                    modifier = Modifier.fillMaxWidth(),
+                                    colors = CardDefaults.cardColors(containerColor = CyberSurface),
+                                    shape = RoundedCornerShape(16.dp),
+                                    border = BorderStroke(1.dp, CyberBorder)
+                                ) {
+                                    Column(modifier = Modifier.padding(16.dp)) {
+                                        Text(
+                                            text = "Final Execution Strategy",
+                                            fontWeight = FontWeight.Bold,
+                                            color = CyberCyan,
+                                            fontSize = 16.sp
+                                        )
+                                        Spacer(modifier = Modifier.height(8.dp))
+                                        Text(
+                                            text = "Commit processed slices to sovereign archival formats.",
+                                            color = CyberTextMuted,
+                                            fontSize = 12.sp
+                                        )
+                                        
+                                        Spacer(modifier = Modifier.height(24.dp))
+                                        
+                                        Button(
+                                            onClick = { viewModel.startExport(context) },
+                                            modifier = Modifier.fillMaxWidth().height(56.dp),
+                                            colors = ButtonDefaults.buttonColors(
+                                                containerColor = CyberCyan,
+                                                contentColor = CyberBg
+                                            ),
+                                            shape = RoundedCornerShape(12.dp),
+                                            enabled = importState is ImportState.Success && exportState !is ExportState.Exporting
+                                        ) {
+                                            if (exportState is ExportState.Exporting) {
+                                                CircularProgressIndicator(
+                                                    modifier = Modifier.size(24.dp),
+                                                    color = CyberBg,
+                                                    strokeWidth = 2.dp
+                                                )
+                                                Spacer(modifier = Modifier.width(12.dp))
+                                                Text("Processing Commit...", fontWeight = FontWeight.Bold)
+                                            } else {
+                                                Icon(Icons.Default.RocketLaunch, contentDescription = null)
+                                                Spacer(modifier = Modifier.width(12.dp))
+                                                Text("RUN / COMMIT EXPORT", fontWeight = FontWeight.ExtraBold, fontSize = 16.sp)
                                             }
                                         }
                                     }
                                 }
-                            } else if (filteredChats.isEmpty()) {
-                                item {
-                                    Box(
-                                        modifier = Modifier
-                                            .fillMaxWidth()
-                                            .padding(32.dp),
-                                        contentAlignment = Alignment.Center
-                                    ) {
-                                        Text("No chats found matching search filter '$searchQuery'.", color = CyberTextMuted, fontSize = 13.sp)
-                                    }
-                                }
-                            } else {
-                                items(filteredChats) { chat ->
-                                    ChatPreviewItemCard(
-                                        conversation = chat,
-                                        isExpanded = selectedPreviewChat?.id == chat.id,
-                                        searchQuery = searchQuery,
-                                        onClick = {
-                                            selectedPreviewChat = if (selectedPreviewChat?.id == chat.id) null else chat
-                                        }
-                                    )
-                                }
                             }
-                        }
 
-                        2 -> {
-                            // TAB 2: Engine Room 🛰️ (Export Controls, SAF Storage & Forensics)
                             item {
-                                AdvancedDashboardTogglesCard(viewModel = viewModel)
+                                ExportControlCard(
+                                    viewModel = viewModel,
+                                    onLaunchFolderPicker = { pickFolderLauncher.launch(null) },
+                                    onTriggerExport = { viewModel.startExport(context) },
+                                    onShareExport = {
+                                        if (viewModel.customExportFolderUri.value == null) {
+                                            pickFolderLauncher.launch(null)
+                                        } else if (exportState is ExportState.Success) {
+                                            val successState = exportState as ExportState.Success
+                                            shareExportedFile(context, successState.fileUri)
+                                        }
+                                    }
+                                )
                             }
-
+                            
                             item {
                                 FilterConfigurationCard(
                                     startDate = startDate,
@@ -550,49 +661,48 @@ fun DashboardScreen(viewModel: GrokViewModel) {
                                 )
                             }
 
-                            item {
-                                ExportControlCard(
-                                    viewModel = viewModel,
-                                    onLaunchFolderPicker = { pickFolderLauncher.launch(null) },
-                                    onTriggerExport = { viewModel.startExport(context) },
-                                    onShareExport = {
-                                        if (viewModel.customExportFolderUri.value == null) {
-                                            pickFolderLauncher.launch(null)
-                                        } else if (exportState is ExportState.Success) {
-                                            val successState = exportState as ExportState.Success
-                                            shareExportedFile(context, successState.fileUri)
-                                        }
-                                    }
-                                )
-                            }
-
-                            item { PeriodicAutoSaveControlCard(viewModel = viewModel) }
-
                             item { VisualExportMetricsCard(viewModel = viewModel) }
-
-                            item { JsonSchemaExplorerAndPackCard(viewModel = viewModel) }
-
-                            item { SchemaInspectorCard(viewModel = viewModel) }
-
-                            item { SchemaVersionManagerCard(viewModel = viewModel) }
-
-                            if (enableBatchMode) {
-                                item { BatchConsoleCard(viewModel = viewModel) }
-                            }
-
-                            item { RecursiveBinarySearchCard(viewModel = viewModel) }
-
-                            item { AutoBackupHistoryCard(viewModel = viewModel) }
-
+                            
                             item {
                                 GrokLoggerPanel(logs = logs, viewModel = viewModel)
                             }
+                            
+                            item {
+                                ProcessingJobsHistoryCard(
+                                    jobs = jobs,
+                                    onViewLogs = { viewingJobLogs = it },
+                                    onViewReports = { viewingJobReports = it },
+                                    onShareZip = { job ->
+                                        val zipFile = File(job.folderPath, "grok_processed_export.zip")
+                                        if (zipFile.exists()) {
+                                            val authority = "${context.packageName}.fileprovider"
+                                            val fileUri = androidx.core.content.FileProvider.getUriForFile(context, authority, zipFile)
+                                            shareExportedFile(context, fileUri)
+                                        }
+                                    },
+                                    onDeleteJob = { viewModel.deleteJob(context, it) },
+                                    onClearAll = { viewModel.clearAllJobs(context) }
+                                )
+                            }
                         }
+                    }
+
+                    if (enableBatchMode) {
+                        item { BatchConsoleCard(viewModel = viewModel) }
+                    }
+
+                    item { RecursiveBinarySearchCard(viewModel = viewModel) }
+
+                    item { AutoBackupHistoryCard(viewModel = viewModel) }
+
+                    item {
+                        GrokLoggerPanel(logs = logs, viewModel = viewModel)
                     }
                 }
             }
         }
     }
+}
 }
 
 @Composable
