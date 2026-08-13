@@ -16,3 +16,13 @@
 local.properties
 .env
 debug.keystore
+
+# Binary artifacts and build outputs — never commit
+*.apk
+*.aab
+*.zip
+*.dex
+*.class
+*.so
+*.jar
+!gradle/wrapper/gradle-wrapper.jar
